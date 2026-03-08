@@ -118,10 +118,18 @@ def rank_correlation(x, y, method='pearson'):
 
 def compute_correlation(x, y, method='pearson'):
     """Returns correlation scores (not ranked indices) for each feature."""
-    if len(x.shape) == 1:
+    x = np.asarray(x)
+    y = np.asarray(y)
+    
+    if x.ndim == 0:
+        x = x.reshape(1, 1)
+    elif x.ndim == 1:
+        # Check if it's a single feature with N samples, or N features with 1 sample.
+        # Usually data is (samples, features). A 1D array of length N is N samples for 1 feature.
         x = x.reshape(-1, 1)
         
     n_features = x.shape[1]
+    
     if method == 'spearman':
         scores = []
         for i in range(n_features):
