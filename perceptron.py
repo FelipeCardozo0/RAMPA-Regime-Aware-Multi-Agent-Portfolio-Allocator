@@ -1,5 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from collections import Counter
 
 def read_file(filename):
@@ -135,6 +134,7 @@ class AvgPerceptron(Perceptron):
         return preds
 
 if __name__ == "__main__":
+    import matplotlib.pyplot as plt
     from sklearn.model_selection import train_test_split
     
     # Run Experiments for HW3

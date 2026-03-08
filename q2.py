@@ -1,7 +1,6 @@
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import roc_auc_score, f1_score, fbeta_score
-import matplotlib.pyplot as plt
 import numpy as np
 
 def tune_dt(x, y, dparams, lsparams):
@@ -23,6 +22,7 @@ def tune_dt(x, y, dparams, lsparams):
     }
 
 if __name__ == "__main__":
+    import matplotlib.pyplot as plt
     from preprocess import preprocess_and_partition, feature_selection_pearson, feature_selection_spearman, feature_selection_mi
     
     # Reloading with partitioning
