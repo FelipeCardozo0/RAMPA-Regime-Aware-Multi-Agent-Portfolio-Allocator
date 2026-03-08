@@ -7,7 +7,8 @@ def read_file(filename):
     with open(filename, 'r') as f:
         for line in f:
             row = line.strip().split()
-            label.append(int(row[0]))
+            l_val = int(row[0])
+            label.append(1 if l_val == 1 else -1)
             emails.append(row[1:])
     return emails, label
 
@@ -55,8 +56,8 @@ class Perceptron():
     def sample_update(self, x, y):
         # dot product
         activation = np.dot(self.w, x)
-        # prediction: if w.x >= 0, predict 1, else 0
-        pred = 1 if activation >= 0 else 0
+        # prediction: if w.x >= 0, predict 1, else -1
+        pred = 1 if activation >= 0 else -1
         mistake = 1 if pred != y else 0
         
         if mistake:
@@ -90,7 +91,7 @@ class Perceptron():
     def predict(self, newx):
         # newx: m x p_plus_1
         activations = np.dot(newx, self.w)
-        preds = np.where(activations >= 0, 1, 0)
+        preds = np.where(activations >= 0, 1, -1)
         return preds
 
 class AvgPerceptron(Perceptron):
@@ -130,7 +131,7 @@ class AvgPerceptron(Perceptron):
         
     def predict(self, newx):
         activations = np.dot(newx, self.avg_w)
-        preds = np.where(activations >= 0, 1, 0)
+        preds = np.where(activations >= 0, 1, -1)
         return preds
 
 if __name__ == "__main__":
@@ -220,9 +221,9 @@ if __name__ == "__main__":
         temp_avg_w = ap.avg_w / counter
         # prediction with current avg
         activations_tr = np.dot(subtr_x, temp_avg_w)
-        preds_tr = np.where(activations_tr >= 0, 1, 0)
+        preds_tr = np.where(activations_tr >= 0, 1, -1)
         activations_v = np.dot(val_x, temp_avg_w)
-        preds_v = np.where(activations_v >= 0, 1, 0)
+        preds_v = np.where(activations_v >= 0, 1, -1)
         
         train_errors_ap.append(np.mean(preds_tr != y_subtr))
         val_errors_ap.append(np.mean(preds_v != y_val))

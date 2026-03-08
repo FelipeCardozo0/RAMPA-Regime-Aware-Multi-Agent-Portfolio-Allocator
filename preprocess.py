@@ -118,6 +118,9 @@ def rank_correlation(x, y, method='pearson'):
 
 def compute_correlation(x, y, method='pearson'):
     """Returns correlation scores (not ranked indices) for each feature."""
+    if len(x.shape) == 1:
+        x = x.reshape(-1, 1)
+        
     n_features = x.shape[1]
     if method == 'spearman':
         scores = []
