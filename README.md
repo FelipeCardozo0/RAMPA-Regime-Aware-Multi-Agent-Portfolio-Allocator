@@ -1,58 +1,57 @@
-# RAMPA — Regime-Aware Multi-Agent Portfolio Allocator
+<p align="center">
+  <img src="https://img.shields.io/badge/RAMPA-v1.0.0-0d1117?style=for-the-badge&labelColor=0d1117&color=58a6ff" alt="version"/>
+  <img src="https://img.shields.io/badge/python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="python"/>
+  <img src="https://img.shields.io/badge/PyTorch-2.1+-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white" alt="pytorch"/>
+  <img src="https://img.shields.io/badge/LightGBM-4.0+-9ACD32?style=for-the-badge" alt="lightgbm"/>
+  <img src="https://img.shields.io/badge/Stable--Baselines3-PPO-blue?style=for-the-badge" alt="sb3"/>
+  <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="license"/>
+</p>
 
-**Version:** 1.0.0  
-**Author:** Felipe Cardozo  
-**Institution:** Emory University  
-**Status:** Research / Portfolio Project  
-**License:** MIT
+<h1 align="center">RAMPA</h1>
+<h4 align="center">Regime-Aware Multi-Agent Portfolio Allocator</h4>
 
-| Component        | Technology                         | Version  |
-|------------------|------------------------------------|----------|
-| Language         | Python                             | 3.11+    |
-| ML Framework     | scikit-learn                       | 1.4+     |
-| Boosting         | LightGBM                           | 4.0+     |
-| Deep Learning    | PyTorch                            | 2.1+     |
-| RL Framework     | Stable-Baselines3 + Gymnasium      | 2.2+     |
-| Backtesting      | vectorbt                           | 0.26+    |
-| Experiment Track | MLflow                             | 2.9+     |
-| Package Manager  | uv                                 | 0.1+     |
-| Config Format    | YAML                               | —        |
-| Data Format      | Apache Parquet                     | —        |
+<p align="center">
+  <em>Hierarchical ML pipeline — from regime detection to reinforcement learning execution.</em>
+</p>
 
-## Abstract
+<p align="center">
+  <a href="#overview">Overview</a> •
+  <a href="#pipeline">Pipeline</a> •
+  <a href="#installation">Installation</a> •
+  <a href="#methods">Methods</a> •
+  <a href="#backtest-results">Results</a> •
+  <a href="#references">References</a>
+</p>
 
-RAMPA is a regime-aware portfolio allocation framework that integrates regime detection, alpha generation, rough volatility calibration, and reinforcement learning into a single hierarchical pipeline. The system addresses the fragility of static mean–variance optimization by conditioning allocation decisions on hidden market regimes and high-dimensional predictive features. Methodologically, RAMPA combines hidden Markov models for regime labeling, gradient-boosted trees for cross-sectional alpha signals, a deep neural network calibrated to the rough Bergomi model for implied volatility surfaces, and a PPO agent trained in a custom portfolio environment. In a walk-forward backtest, RAMPA outperforms a 60/40 benchmark and a classical MVO portfolio on risk-adjusted metrics while maintaining strictly controlled drawdowns.
+---
 
-## Table of Contents
+## Overview
 
-- [Abstract](#abstract)
-- [Table of Contents](#table-of-contents)
-- [Project Overview](#project-overview)
-- [Repository Structure](#repository-structure)
-- [Installation](#installation)
-- [Running the Pipeline](#running-the-pipeline)
-- [Methods](#methods)
-  - [8.1 Data and Features](#81-data-and-features)
-  - [8.2 Dimensionality Reduction and Baseline Regression](#82-dimensionality-reduction-and-baseline-regression)
-  - [8.3 Regime Classification](#83-regime-classification)
-  - [8.4 Alpha Signal Generation](#84-alpha-signal-generation)
-  - [8.5 Volatility Oracle](#85-volatility-oracle)
-  - [8.6 Reinforcement Learning Execution Engine](#86-reinforcement-learning-execution-engine)
-  - [8.7 Backtest Results](#87-backtest-results)
-- [Model Validation](#model-validation)
-- [Limitations](#limitations)
-- [References](#references)
-- [License and Citation](#license-and-citation)
+**RAMPA** is a regime-aware portfolio allocation framework that integrates regime detection, alpha generation, rough volatility calibration, and reinforcement learning into a single hierarchical pipeline. It addresses the fragility of static mean–variance optimization by conditioning allocation decisions on hidden market regimes and high-dimensional predictive features.
 
-## Project Overview
+| Phase | Method | Output |
+|:------|:-------|:-------|
+| **Feature Engineering** | PCA eigen-portfolios, fractional differencing, Lasso/Ridge baselines | Compressed feature matrix |
+| **Regime Classification** | HMM labeling → Naive Bayes baseline → RBF-SVM | 4-state regime labels |
+| **Alpha Generation** | Decision Tree → Random Forest → LightGBM ensemble | Cross-sectional alpha signals |
+| **Volatility Oracle** | GARCH(1,1) + Deep Neural Net calibrated to rBergomi model | Time-varying $(H, \eta, \xi_0)$ |
+| **RL Execution** | PPO agent in custom Gymnasium `PortfolioEnv` | Regime-aware portfolio weights |
 
-Static mean–variance optimization (MVO) assumes that asset return moments are stationary and can be estimated reliably from finite samples. In practice, asset return distributions exhibit time-varying volatility, structural breaks, and heavy tails, which cause covariance matrix estimates to be unstable and amplify estimation error in optimized portfolios. Moreover, single-period MVO is myopic: it ignores regime shifts, path-dependence, and higher-order features that are critical for robust portfolio construction in real markets.
+The core design principle is that each technique is applied to the subproblem for which it has the strongest theoretical justification: HMMs where latent state dynamics are central, gradient-boosted trees where non-linear interactions dominate, rough volatility models where fractional dynamics are empirically supported, and PPO where policy gradients under continuous actions and risk constraints are required.
 
-RAMPA addresses these limitations by organizing the portfolio construction process into a hierarchical machine learning pipeline. Each phase solves a narrowly defined subproblem and exposes well-defined artefacts (features, labels, signals, parameters, and policies) to the subsequent phase. Regime detection, alpha generation, volatility modelling, and reinforcement learning are coordinated but decoupled, allowing each component to be selected, tuned, and validated according to its own statistical and economic assumptions. This modular design makes the system extensible while preserving a coherent end-to-end workflow.
+| Component | Technology | Version |
+|:----------|:-----------|:--------|
+| ML Framework | scikit-learn | 1.4+ |
+| Boosting | LightGBM | 4.0+ |
+| Deep Learning | PyTorch | 2.1+ |
+| RL Framework | Stable-Baselines3 + Gymnasium | 2.2+ |
+| Backtesting | vectorbt | 0.26+ |
+| Experiment Tracking | MLflow | 2.9+ |
+| Package Manager | uv | 0.1+ |
 
-The pipeline is structured into five phases. Phase 1 performs feature engineering and dimensionality reduction, transforming raw price, macro, and derivative data into a compressed representation that preserves predictive structure. Phase 2 learns hidden market regimes using a hidden Markov model and trains discriminative classifiers that can assign regime labels out-of-sample. Phase 3 estimates cross-sectional alpha signals using tree-based ensemble models, explicitly conditioning on the inferred regimes. Phase 4 constructs a volatility oracle by combining a GARCH baseline with a deep neural network that calibrates an rBergomi model to the implied volatility surface, producing time-varying rough volatility parameters. Phase 5 embeds these components into a Gymnasium-compatible portfolio environment and trains a PPO agent that outputs regime-aware portfolio weights, which are evaluated in a walk-forward backtest.
+---
 
-The core design principle is that each technique is applied to the subproblem for which it has the strongest theoretical justification. HMMs are used where latent state dynamics and persistence are central; gradient-boosted trees are used where non-linear interactions in high-dimensional feature spaces dominate; rough volatility models are used where empirical evidence supports fractional dynamics in volatility; and PPO is used where policy gradients under continuous actions and risk constraints are required. The result is a portfolio allocator that is both statistically grounded and operationally implementable.
+## Pipeline
 
 ```text
 RAW DATA
@@ -81,322 +80,382 @@ Phase 5: RL Execution Engine
 Walk-Forward Backtest → Performance Report
 ```
 
+---
+
+## Data and Features
+
+The investable universe consists of five highly liquid U.S.-listed ETFs: **SPY** (large-cap equity), **QQQ** (growth/technology), **IEF** (intermediate Treasuries), **GLD** (gold), and **SHV** (cash-like Treasuries). From 2010 to 2024, daily prices are transformed into log returns, realized volatility measures, and cross-sectional spreads, augmented with macroeconomic indicators and option-implied features.
+
+<p align="center">
+  <img src="reports/figures/fig_01_asset_prices.png" width="100%" alt="Asset price history"/>
+</p>
+
+<sub>Figure 1. Normalized price indices (base = 100) for the five-asset universe. Gray bands denote the COVID-19 crash and 2022 rate-hike stress period. The diversification benefit of IEF and GLD is evident during the 2020 drawdown.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_02_correlation_matrix.png" width="100%" alt="Correlation matrix"/>
+</p>
+
+<sub>Figure 2. Average pairwise return correlations over the full sample. Low GLD–equity correlation and negative IEF–SPY correlation during stress motivate their inclusion as diversifiers.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_03_return_distributions.png" width="100%" alt="Return distributions"/>
+</p>
+
+<sub>Figure 3. Empirical return distributions. Negative skewness and excess kurtosis across all series confirm that Gaussian assumptions underlying classical MVO are violated.</sub>
+
+---
+
+## Methods
+
+### Dimensionality Reduction and Baseline Regression
+
+The raw feature set spans 100+ dimensions. PCA extracts orthogonal latent factors (eigen-portfolios) that summarize co-movements across assets and macro drivers. Linear models (Lasso, Ridge, online SGD) trained on these factors provide transparent benchmarks against which non-linear models are evaluated.
+
+<p align="center">
+  <img src="reports/figures/fig_04_pca_variance.png" width="100%" alt="PCA explained variance"/>
+</p>
+
+<sub>Figure 4. Individual and cumulative explained variance by PCA component. Fewer than 15 components explain 90% of variance, achieving substantial compression from 100+ raw features.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_05_factor_loadings.png" width="100%" alt="Factor loadings"/>
+</p>
+
+<sub>Figure 5. PCA factor loadings for the top five components. Factor 1 loads on yield-curve tenors (level factor); Factor 2 loads on equity volatility features (risk appetite factor).</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_06_fractional_diff.png" width="100%" alt="Fractional differentiation"/>
+</p>
+
+<sub>Figure 6. Raw SPY price, standard log returns (d = 1.0), and fractionally differenced series at minimum stationary order d*. Fractional differencing preserves long-range dependence while satisfying stationarity requirements.</sub>
+
+---
+
+### Regime Classification
+
+Hidden Markov models infer latent market regimes from macro and volatility-sensitive features, capturing persistence and transition dynamics invisible in raw returns. The HMM labels historical periods into four interpretable regimes: **Trending Bull**, **Choppy**, **High-Vol Stress**, and **Crisis**. Discriminative classifiers (Naive Bayes baseline, production RBF-SVM) then predict regimes out-of-sample.
+
+<p align="center">
+  <img src="reports/figures/fig_07_regime_timeline.png" width="100%" alt="Regime timeline"/>
+</p>
+
+<sub>Figure 7. SPY price (log scale) with HMM-decoded regime overlay. The model correctly identifies COVID as a Crisis episode and 2022 as High-Volatility Stress.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_08_regime_posterior.png" width="100%" alt="Regime posteriors"/>
+</p>
+
+<sub>Figure 8. Posterior probabilities for each regime over time. Rapid transitions during dislocations confirm the HMM is responsive to structural breaks.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_09_regime_transition_matrix.png" width="100%" alt="Transition matrix"/>
+</p>
+
+<sub>Figure 9. HMM transition probability matrix. High diagonal values confirm regime persistence. The Crisis regime has the lowest self-transition probability, consistent with the episodic nature of crises.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_10_regime_return_stats.png" width="100%" alt="Return stats by regime"/>
+</p>
+
+<sub>Figure 10. Return distributions and annualized volatility by regime. Crisis exhibits the widest distribution and highest volatility; Trending Bull produces the most consistent positive returns.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_11_svm_confusion_matrix.png" width="100%" alt="SVM confusion matrices"/>
+</p>
+
+<sub>Figure 11. Out-of-sample confusion matrices for Naive Bayes and RBF-SVM. The SVM achieves higher accuracy across all four classes. Most common misclassification: Choppy ↔ Trending Bull.</sub>
+
+---
+
+### Alpha Signal Generation
+
+Cross-sectional alpha signals are generated using tree-based ensembles trained on engineered features and regime labels. LightGBM is selected for its ability to model non-linear interactions and handle heterogeneous feature scales. The target is next-day SPY return; model outputs become continuous long–short signals that are explicitly **regime-conditional**.
+
+<p align="center">
+  <img src="reports/figures/fig_12_feature_importance.png" width="100%" alt="Feature importance"/>
+</p>
+
+<sub>Figure 12. LightGBM feature importances (gain) for the top 25 features. Volatility and momentum features dominate (Gu, Kelly & Xiu, 2020). The regime_id feature ranks top 10, confirming regime conditioning adds predictive content.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_13_rolling_ic.png" width="100%" alt="Rolling IC"/>
+</p>
+
+<sub>Figure 13. 63-day rolling Information Coefficient (Spearman rank correlation). Positive IC during trending markets, near-zero during choppy regimes — consistent with regime-conditional signal efficacy.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_14_alpha_signal_heatmap.png" width="100%" alt="Alpha signal heatmap"/>
+</p>
+
+<sub>Figure 14. Monthly average ensemble alpha signal. Values above 0.5 indicate net long bias. Strong long signals during 2013–2014 and 2019–2020 Q1; correct defensive shift during March 2020.</sub>
+
+---
+
+### Volatility Oracle
+
+The volatility oracle combines a GARCH(1,1) baseline with a deep neural network calibrated to the rough Bergomi (rBergomi) model. Historical SPY option chains are transformed into implied volatility surfaces, which a CNN maps to underlying rBergomi parameters $(H, \eta, \xi_0)$. This produces a time-varying rough volatility signal for both risk management and RL policy conditioning.
+
+<p align="center">
+  <img src="reports/figures/fig_15_garch_conditional_vol.png" width="100%" alt="GARCH volatility"/>
+</p>
+
+<sub>Figure 15. GARCH(1,1) conditional volatility vs. 21-day realized volatility. GARCH tracks calm periods well but underestimates the speed of volatility spikes during dislocations.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_16_iv_surface.png" width="100%" alt="IV surface"/>
+</p>
+
+<sub>Figure 16. SPY implied volatility surface. The characteristic downward slope (skew) across moneyness and upward term structure are clearly visible.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_17_dnn_calibration.png" width="100%" alt="DNN calibration"/>
+</p>
+
+<sub>Figure 17. True vs. predicted rBergomi parameters on the synthetic test set. Tight clustering around the diagonal confirms accurate calibration. Hurst exponent H achieves the highest R², as it most strongly affects IV surface skew.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_18_hurst_over_time.png" width="100%" alt="Hurst exponent"/>
+</p>
+
+<sub>Figure 18. Time series of estimated Hurst exponent H. Values consistently below 0.5 confirm rough volatility (Gatheral et al., 2018). Spikes toward H = 0.3–0.4 during stress indicate temporarily less rough behaviour.</sub>
+
+---
+
+### Reinforcement Learning Execution Engine
+
+The execution engine is a custom Gymnasium environment (`PortfolioEnv`) exposing continuous portfolio weights over the five-ETF universe. The agent observes features, regime indicators, and volatility oracle outputs, then chooses allocations subject to leverage and turnover constraints. PPO is used for its robustness and ability to handle continuous actions with clipped updates. The reward function balances risk-adjusted returns against drawdown and turnover penalties.
+
+<p align="center">
+  <img src="reports/figures/fig_19_training_reward_curve.png" width="100%" alt="Training reward"/>
+</p>
+
+<sub>Figure 19. PPO training reward over timesteps. Rolling mean improves monotonically and stabilises above the random baseline. Reward plateau at ~700K steps suggests convergence.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_20_weight_allocation.png" width="100%" alt="Weight allocation"/>
+</p>
+
+<sub>Figure 20. Portfolio weight allocation over the backtest. The agent shifts toward IEF and SHV during the 2020 crash and 2022 rate-hike period, then returns to equity-heavy positioning during 2023 recovery.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_21_weight_regime_heatmap.png" width="100%" alt="Weights by regime"/>
+</p>
+
+<sub>Figure 21. Mean portfolio weights by regime. Majority SPY/QQQ during Trending Bull; substantial rotation into IEF/SHV during Crisis. This regime-conditional allocation is the core behavioural contribution over static MVO.</sub>
+
+---
+
+## Backtest Results
+
+Expanding-window walk-forward backtest from 2015 onward, all hyperparameters fixed prior to evaluation. RAMPA is compared against a static 60/40 portfolio (SPY/IEF), an equal-weight portfolio, and a rolling-window MVO portfolio.
+
+<p align="center">
+  <img src="reports/figures/fig_22_cumulative_returns.png" width="100%" alt="Cumulative returns"/>
+</p>
+
+<sub>Figure 22. Cumulative portfolio value for RAMPA and three benchmarks. RAMPA achieves higher terminal value with shallower drawdowns during both major stress episodes.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_23_drawdown.png" width="100%" alt="Drawdown"/>
+</p>
+
+<sub>Figure 23. Drawdown profiles. The 10% maximum drawdown constraint on the RL agent is visible as a hard floor on RAMPA. The 60/40 benchmark breaches 20% drawdown during 2022.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_24_rolling_sharpe.png" width="100%" alt="Rolling Sharpe"/>
+</p>
+
+<sub>Figure 24. 63-day rolling Sharpe ratio. RAMPA outperforms most consistently during regime transitions, where its state-conditional policy provides an informational advantage.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_25_metrics_comparison.png" width="100%" alt="Metrics comparison"/>
+</p>
+
+<sub>Figure 25. Risk-adjusted performance metrics. RAMPA leads on Sharpe, Sortino, and Calmar ratios. The Sortino improvement over Sharpe indicates excess return comes from upside capture, not increased downside risk.</sub>
+
+<p align="center">
+  <img src="reports/figures/fig_26_monthly_returns_heatmap.png" width="100%" alt="Monthly returns"/>
+</p>
+
+<sub>Figure 26. Monthly return heatmaps for RAMPA (top) and 60/40 (bottom). RAMPA produces fewer extreme negative months and a more consistent positive return profile across calendar years.</sub>
+
+---
+
+## Model Validation
+
+Regime and alpha models are validated using **purged cross-validation with embargo** (Lopez de Prado, 2018). Observations temporally adjacent to the test set are removed from training folds, and an embargo window prevents information leakage via overlapping labels or serial correlation — superior to standard time-series splits.
+
+The walk-forward backtest uses an **expanding window**: train on data up to time $t$, evaluate on the next out-of-sample segment, extend, repeat. All hyperparameters are fixed prior to the final backtest with no re-tuning on test-period information.
+
+For RL, the reward is a **Markovian step-level proxy** (not terminal Sharpe, which is non-Markovian) combining risk-adjusted instantaneous return, drawdown penalties, and turnover costs. This aligns RL learning signals with traditional portfolio metrics without violating the Markov property required by PPO.
+
+---
+
 ## Repository Structure
 
 ```text
 .
-├── config/
-│   ├── data/
-│   ├── features/
-│   ├── regimes/
-│   ├── alpha/
-│   ├── volatility/
-│   └── rl/
+├── config/                          # YAML configs for all pipeline parameters
+│   ├── data/ features/ regimes/ alpha/ volatility/ rl/
 ├── data/
-│   ├── raw/
-│   └── processed/
-│       ├── features.parquet
-│       ├── regime_labels.parquet
-│       ├── alpha_signals.parquet
-│       ├── vol_features.parquet
-│       └── iv_surfaces.parquet
-├── models/
-│   ├── svm_regime.pkl
-│   ├── lgbm_alpha.pkl
-│   ├── deep_vol_net.pt
-│   └── ppo_agent.zip
-├── notebooks/
-│   ├── 01_data_exploration.ipynb
-│   ├── 02_feature_engineering.ipynb
-│   ├── 03_regime_modeling.ipynb
-│   ├── 04_alpha_modeling.ipynb
-│   ├── 05_volatility_oracle.ipynb
-│   ├── 06_rl_training.ipynb
-│   ├── 07_backtest_analysis.ipynb
-│   └── 08_visualizations.ipynb
+│   ├── raw/                         # Fetched market data
+│   └── processed/                   # Parquet artefacts (features, labels, signals)
+├── src/                             # Source modules by pipeline phase
+│   ├── data/ features/ regime/ alpha/ volatility/ rl/ backtest/
+├── notebooks/                       # 8 Jupyter notebooks (exploration → visualization)
+├── models/                          # Serialized models (.pkl, .pt, .zip)
+├── tests/                           # Pytest suite
 ├── reports/
 │   ├── backtest_summary.csv
-│   └── figures/
-│       ├── fig_01_asset_prices.png
-│       ├── fig_02_correlation_matrix.png
-│       ├── fig_03_return_distributions.png
-│       ├── fig_04_pca_variance.png
-│       ├── fig_05_factor_loadings.png
-│       ├── fig_06_fractional_diff.png
-│       ├── fig_07_regime_timeline.png
-│       ├── fig_08_regime_posterior.png
-│       ├── fig_09_regime_transition_matrix.png
-│       ├── fig_10_regime_return_stats.png
-│       ├── fig_11_svm_confusion_matrix.png
-│       ├── fig_12_feature_importance.png
-│       ├── fig_13_rolling_ic.png
-│       ├── fig_14_alpha_signal_heatmap.png
-│       ├── fig_15_garch_conditional_vol.png
-│       ├── fig_16_iv_surface.png
-│       ├── fig_17_dnn_calibration.png
-│       ├── fig_18_hurst_over_time.png
-│       ├── fig_19_training_reward_curve.png
-│       ├── fig_20_weight_allocation.png
-│       ├── fig_21_weight_regime_heatmap.png
-│       ├── fig_22_cumulative_returns.png
-│       ├── fig_23_drawdown.png
-│       ├── fig_24_rolling_sharpe.png
-│       ├── fig_25_metrics_comparison.png
-│       └── fig_26_monthly_returns_heatmap.png
-├── src/
-│   ├── data/
-│   ├── features/
-│   ├── regime/
-│   ├── alpha/
-│   ├── volatility/
-│   ├── rl/
-│   └── backtest/
-├── tests/
-├── .env.example
+│   └── figures/                     # 26 auto-generated figures
 ├── pyproject.toml
 ├── requirements.txt
-└── README.md
+└── .env.example
 ```
 
-| Directory    | Description                                          |
-|--------------|------------------------------------------------------|
-| `config/`    | YAML configuration files for all pipeline parameters |
-| `data/`      | Raw fetched data and processed Parquet artefacts     |
-| `src/`       | Source modules organized by pipeline phase           |
-| `notebooks/` | Exploratory and visualization Jupyter notebooks      |
-| `models/`    | Serialized trained model files                       |
-| `tests/`     | Pytest test suite for all modules                    |
-| `reports/`   | Backtest summary CSV and generated figures           |
+---
 
 ## Installation
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/<username>/rampa.git
-cd rampa
+# Clone and install
+git clone https://github.com/FelipeCardozo0/RAMPA-Regime-Aware-Multi-Agent-Portfolio-Allocator.git
+cd RAMPA-Regime-Aware-Multi-Agent-Portfolio-Allocator
 
-# 2. Install uv (if not already installed)
+# Install uv and create environment
 pip install uv
-
-# 3. Create a virtual environment and install all dependencies
 uv venv
-source .venv/bin/activate      # Linux / macOS
-.venv\Scripts\activate         # Windows (PowerShell)
+source .venv/bin/activate          # Linux / macOS
 uv pip install -e .
 
-# 4. Verify the installation
+# Verify
 python -c "import lightgbm, torch, stable_baselines3; print('Installation verified.')"
 
-# 5. Copy the environment template and populate API keys
+# Configure API keys
 cp .env.example .env
-# Edit .env and insert your FRED_API_KEY, POLYGON_API_KEY, NASDAQ_API_KEY
+# Edit .env with your keys
 ```
 
-| Key                | Source              | Cost                |
-|--------------------|---------------------|---------------------|
-| `FRED_API_KEY`     | fred.stlouisfed.org | Free                |
-| `POLYGON_API_KEY`  | polygon.io          | Free tier available |
-| `NASDAQ_API_KEY`   | data.nasdaq.com     | Free                |
+| Key | Source | Cost |
+|:----|:-------|:-----|
+| `FRED_API_KEY` | fred.stlouisfed.org | Free |
+| `POLYGON_API_KEY` | polygon.io | Free tier |
+| `NASDAQ_API_KEY` | data.nasdaq.com | Free |
+
+---
 
 ## Running the Pipeline
 
 ```bash
-# Step 1 — Fetch raw data
+# Data
 python data/scripts/fetch_equity.py
 python data/scripts/fetch_macro.py
 python data/scripts/fetch_options.py
-
-# Step 2 — Build feature matrix
 python data/scripts/build_dataset.py
 
-# Step 3 — Train regime classifier
+# Training (steps 3–6 can run independently after step 2)
 python src/regime/train_regime.py
-
-# Step 4 — Train alpha models
 python src/alpha/train_alpha.py
-
-# Step 5 — Train volatility oracle
 python src/volatility/deep_vol_net.py
-
-# Step 6 — Train RL agent
 python src/rl/ppo_agent.py
 
-# Step 7 — Run walk-forward backtest
+# Evaluation
 python src/backtest/generate_report.py
-
-# Step 8 — Generate all visualizations
 jupyter nbconvert --to notebook --execute notebooks/08_visualizations.ipynb
 
-# Optional — launch MLflow UI
-mlflow ui  # opens at http://localhost:5000
+# Optional — MLflow UI
+mlflow ui    # http://localhost:5000
 ```
 
-Once step 2 has completed and the processed datasets exist in `data/processed/`, steps 3 through 6 can be run independently and in any order. Each training script loads its inputs from the Parquet artefacts rather than relying on in-memory state from previous steps, which simplifies experimentation and hyperparameter sweeps.
+> Once `data/processed/` is populated, training steps load from Parquet artefacts rather than in-memory state — run them in any order for experimentation and hyperparameter sweeps.
 
-## Methods
-
-### 8.1 Data and Features
-
-The investable universe consists of five highly liquid U.S.-listed ETFs: SPY (U.S. large-cap equity), QQQ (U.S. growth/technology equity), IEF (intermediate Treasuries), GLD (gold), and SHV (cash-like Treasuries). From 2010 to 2024, daily prices are transformed into log returns, realized volatility measures, and cross-sectional spreads; these are augmented with macroeconomic indicators and option-implied features to form a unified feature matrix. The resulting dataset combines slow-moving macro structure with fast-moving market microstructure, enabling models to detect both regime-level shifts and short-horizon alpha. All engineered features are stored in `data/processed/features.parquet` for reproducible downstream use.
-
-![Asset Price History](reports/figures/fig_01_asset_prices.png)  
-*Figure 1. Normalized price indices (base = 100) for the five-asset universe. Gray bands denote the COVID-19 crash (Feb–Apr 2020) and the 2022 rate-hike stress period. The diversification benefit of including IEF and GLD is evident during the 2020 drawdown.*
-
-![Return Correlation Matrix](reports/figures/fig_02_correlation_matrix.png)  
-*Figure 2. Average pairwise return correlations over the full 2010–2024 sample. The low correlation of GLD with equities and the negative correlation of IEF with SPY during stress periods motivate their inclusion as diversifiers.*
-
-![Return Distributions](reports/figures/fig_03_return_distributions.png)  
-*Figure 3. Empirical return distributions for all five assets. Negative skewness and excess kurtosis (leptokurtosis) across all series confirm that Gaussian assumptions underlying classical MVO are violated.*
-
-### 8.2 Dimensionality Reduction and Baseline Regression
-
-The raw feature set spans more than one hundred dimensions, including overlapping transformations of macro series, realized measures, and implied volatilities. Principal component analysis (PCA) is applied to this standardized feature matrix to extract orthogonal latent factors, which act as eigen-portfolios summarizing co-movements across assets and macro drivers. Linear models such as Lasso, Ridge, and online stochastic gradient descent are trained on these factors as baselines for return forecasting, providing a transparent benchmark against which non-linear models are evaluated. The PCA transformation also mitigates multicollinearity and reduces the effective degrees of freedom in subsequent models.
-
-![PCA Explained Variance](reports/figures/fig_04_pca_variance.png)  
-*Figure 4. Individual and cumulative explained variance by PCA component. The red dashed line marks the 90% threshold. Fewer than 15 components typically explain 90% of variance in the macro + return feature space, achieving substantial compression from over 100 raw features.*
-
-![Factor Loadings](reports/figures/fig_05_factor_loadings.png)  
-*Figure 5. PCA factor loadings for the top five components against the fifteen highest-variance input features. Factor 1 loads heavily on yield-curve tenors, consistent with its interpretation as a level factor. Factor 2 loads on equity volatility features, consistent with a risk appetite factor.*
-
-![Fractional Differentiation](reports/figures/fig_06_fractional_diff.png)  
-*Figure 6. Comparison of the raw SPY price series, standard log returns (d = 1.0), and the fractionally differenced series at the minimum stationary order d*. Fractional differencing preserves long-range dependence that first-differencing discards while satisfying the stationarity requirement of downstream classifiers.*
-
-### 8.3 Regime Classification
-
-Hidden Markov models (HMMs) are employed to infer latent market regimes from macro and volatility-sensitive features, capturing persistence and transition dynamics that are not visible in raw returns alone. The HMM is first used generatively to label historical periods into four interpretable regimes: Trending Bull, Choppy, High-Vol Stress, and Crisis. These labels are then used to train discriminative classifiers, including a Naive Bayes baseline and a production RBF-SVM, which can predict regimes out-of-sample. This two-stage process combines the time-series structure of HMMs with the flexible decision boundaries of kernel methods.
-
-![Regime Timeline](reports/figures/fig_07_regime_timeline.png)  
-*Figure 7. SPY price (log scale) with HMM-decoded regime overlay. The model correctly identifies the COVID crash as a Crisis episode and the 2022 drawdown as a High-Volatility Stress episode. The predominance of the Trending Bull regime during 2013–2019 is consistent with the post-GFC bull market.*
-
-![Regime Posteriors](reports/figures/fig_08_regime_posterior.png)  
-*Figure 8. Posterior probabilities for each regime over time. Rapid transitions in the posterior during market dislocations confirm that the HMM is responsive to structural breaks rather than smoothing them away.*
-
-![Transition Matrix](reports/figures/fig_09_regime_transition_matrix.png)  
-*Figure 9. HMM transition probability matrix. The high diagonal values confirm that regimes are persistent — the system does not churn between states at daily frequency. The Crisis regime has the lowest self-transition probability, consistent with the episodic nature of market crises.*
-
-![Return Stats by Regime](reports/figures/fig_10_regime_return_stats.png)  
-*Figure 10. Return distribution and annualized volatility by regime. The Crisis regime exhibits the widest return distribution and highest volatility. The Trending Bull regime produces the most consistent positive returns.*
-
-![SVM Confusion Matrices](reports/figures/fig_11_svm_confusion_matrix.png)  
-*Figure 11. Out-of-sample confusion matrices for the Naive Bayes baseline and the RBF-SVM production classifier. The SVM achieves meaningfully higher accuracy across all four regime classes. The most common misclassification is between the Choppy and Trending Bull regimes, which are adjacent in feature space.*
-
-### 8.4 Alpha Signal Generation
-
-Cross-sectional alpha signals are generated using tree-based ensemble methods trained on the engineered features and regime labels. A sequence of increasingly expressive models—decision trees, random forests, and finally LightGBM—are compared, with LightGBM selected for its ability to model non-linear interactions and handle heterogeneous feature scales. The target is the next-day SPY return, and model outputs are converted into continuous long–short signals that serve as inputs to the RL agent and benchmark allocation rules. The resulting alpha signal is explicitly regime-conditional, exploiting the observation that trend-following and mean-reversion signals have different efficacy across regimes.
-
-![Feature Importance](reports/figures/fig_12_feature_importance.png)  
-*Figure 12. LightGBM feature importances by gain for the top 25 features. Volatility-based features and momentum features dominate, consistent with the established empirical asset pricing literature (Gu, Kelly & Xiu, 2020). The regime_id feature ranks in the top 10, confirming that regime conditioning adds predictive content beyond technical indicators alone.*
-
-![Rolling IC](reports/figures/fig_13_rolling_ic.png)  
-*Figure 13. Sixty-three-day rolling Information Coefficient (Spearman correlation between predicted signal and realized next-day return). Positive IC during trending markets and near-zero IC during choppy regimes is consistent with the signal being regime-conditional. The dotted line at IC = 0.02 marks the practical significance threshold.*
-
-![Alpha Signal Heatmap](reports/figures/fig_14_alpha_signal_heatmap.png)  
-*Figure 14. Monthly average ensemble alpha signal. A value above 0.5 indicates a net long bias for that month. Strong long signals during 2013–2014 and 2019–2020 Q1 correspond to documented bull-market periods. The signal correctly shifts defensive during March 2020.*
-
-### 8.5 Volatility Oracle
-
-To capture the empirically observed roughness of volatility, the volatility oracle combines a classical GARCH(1,1) baseline with a deep neural network calibrated to the rough Bergomi (rBergomi) model. Historical SPY option chains are transformed into implied volatility surfaces, which are then mapped to underlying rBergomi parameters \`(H, \eta, \xi_0)\` by a convolutional neural network trained on synthetic data. This approach leverages the structural realism of rBergomi while avoiding the computational expense of direct likelihood-based calibration. The resulting time series of rough volatility parameters provides a rich, forward-looking signal for both risk management and RL policy conditioning.
-
-![GARCH Volatility](reports/figures/fig_15_garch_conditional_vol.png)  
-*Figure 15. GARCH(1,1) conditional volatility versus 21-day realized volatility for SPY. The GARCH model tracks realized volatility closely during calm periods but underestimates the speed of volatility spikes during dislocations (volatility clustering).*
-
-![IV Surface](reports/figures/fig_16_iv_surface.png)  
-*Figure 16. SPY implied volatility surface for a representative date. The characteristic downward slope across moneyness (volatility skew) and upward term structure are clearly visible. The deep neural network calibration module learns to map surfaces of this form to the rBergomi parameters (H, eta, xi0) that reproduce them.*
-
-![DNN Calibration](reports/figures/fig_17_dnn_calibration.png)  
-*Figure 17. Scatter plots of true versus predicted rBergomi parameters on the synthetic test set. Points clustered tightly around the diagonal (y = x) confirm accurate calibration. The Hurst exponent H achieves the highest R-squared, as it has the strongest effect on the IV surface skew and is therefore most identifiable from the surface shape.*
-
-![Hurst Over Time](reports/figures/fig_18_hurst_over_time.png)  
-*Figure 18. Time series of the estimated Hurst exponent H_t. Values consistently below 0.5 confirm rough volatility (as established by Gatheral et al., 2018). Episodic spikes toward H = 0.3–0.4 during stress periods indicate temporarily less rough behaviour, consistent with volatility persistence increasing during crises.*
-
-### 8.6 Reinforcement Learning Execution Engine
-
-The execution engine is implemented as a custom Gymnasium environment, \`PortfolioEnv\`, which exposes continuous portfolio weights over the five-ETF universe as actions. At each step, the agent observes current features, regime indicators, and volatility oracle outputs, and chooses a new allocation subject to leverage and turnover constraints. Proximal Policy Optimization (PPO) is used as the policy-gradient algorithm due to its robustness to hyperparameter choices and its ability to handle continuous action spaces with clipped updates. The reward function is a Markovian step-level proxy that balances risk-adjusted returns against drawdown and turnover penalties, ensuring that long-horizon objectives are aligned with step-level learning signals.
-
-![Training Reward Curve](reports/figures/fig_19_training_reward_curve.png)  
-*Figure 19. PPO agent training reward over timesteps. The 50-episode rolling mean (solid line) monotonically improves and stabilises above the random agent baseline, confirming that the agent learns a non-trivial allocation policy. The reward plateau at approximately 700,000 timesteps suggests convergence.*
-
-![Weight Allocation](reports/figures/fig_20_weight_allocation.png)  
-*Figure 20. RAMPA portfolio weight allocation over the full backtest period. The agent shifts toward IEF and SHV (cash) during the 2020 COVID crash and the 2022 rate-hike period, demonstrating that it has learned to respond to regime signals by de-risking. The return to equity-heavy positioning during the 2023 recovery is consistent with rational risk-taking behaviour.*
-
-![Weights by Regime](reports/figures/fig_21_weight_regime_heatmap.png)  
-*Figure 21. Mean portfolio weights by market regime. The agent allocates the majority of capital to SPY and QQQ during the Trending Bull regime and rotates substantially into IEF and SHV during the Crisis regime. This regime-conditional allocation is the core behavioural contribution of the RL framework over static MVO.*
-
-### 8.7 Backtest Results
-
-The full RAMPA pipeline is evaluated using an expanding-window walk-forward backtest from 2015 onward, with all hyperparameters fixed prior to evaluation. RAMPA is compared against three benchmarks: a static 60/40 portfolio (SPY/IEF), an equal-weight portfolio across the five ETFs, and a classic MVO portfolio optimized on a rolling window. Performance is assessed using cumulative returns, drawdown profiles, rolling Sharpe ratios, and risk-adjusted summary statistics. The results demonstrate that RAMPA achieves higher terminal wealth and superior downside risk control relative to all benchmarks.
-
-![Cumulative Returns](reports/figures/fig_22_cumulative_returns.png)  
-*Figure 22. Cumulative portfolio value for RAMPA and three benchmarks over the walk-forward backtest period. RAMPA achieves a higher terminal value with a shallower drawdown profile during the two major stress episodes highlighted.*
-
-![Drawdown](reports/figures/fig_23_drawdown.png)  
-*Figure 23. Drawdown profiles for all four strategies. The 10% maximum drawdown constraint imposed on the RL agent is visible as a hard floor on the RAMPA drawdown curve. The 60/40 benchmark breaches 20% drawdown during the 2022 rate-hike stress.*
-
-![Rolling Sharpe](reports/figures/fig_24_rolling_sharpe.png)  
-*Figure 24. Sixty-three-day rolling Sharpe ratio for RAMPA versus the 60/40 benchmark. RAMPA outperforms most consistently during regime transitions, where its state-conditional policy provides an informational advantage over the static 60/40 allocation.*
-
-![Metrics Comparison](reports/figures/fig_25_metrics_comparison.png)  
-*Figure 25. Grouped bar chart of risk-adjusted performance metrics. RAMPA leads on Sharpe Ratio, Sortino Ratio, and Calmar Ratio. The improvement in Sortino Ratio relative to Sharpe Ratio is particularly notable, indicating that RAMPA's excess return comes predominantly from upside capture rather than increased downside risk.*
-
-![Monthly Returns Heatmap](reports/figures/fig_26_monthly_returns_heatmap.png)  
-*Figure 26. Monthly return heatmaps for RAMPA (top) and the 60/40 benchmark (bottom). RAMPA produces fewer extreme negative months and a more consistent positive return profile across calendar years.*
-
-## Model Validation
-
-Regime and alpha models are validated using purged cross-validation with an embargo period, as proposed by Lopez de Prado. In this scheme, observations that are temporally adjacent to the test set are removed from the training folds, and an additional embargo window is applied around test periods to prevent information leakage via overlapping labels or features. This approach is superior to standard time-series splits because it explicitly accounts for label overlap and serial correlation, which would otherwise inflate out-of-sample performance estimates.
-
-The walk-forward backtest uses an expanding window design: models are trained on data up to time \(t\), then evaluated on the next out-of-sample segment, after which the training window is extended to include this segment, and the process is repeated. This procedure mimics the information flow available to a real-world practitioner and avoids in-sample evaluation bias. All hyperparameters are fixed prior to the final backtest, and no re-tuning is performed using test-period information.
-
-For the reinforcement learning component, the reward cannot be the terminal Sharpe ratio because Sharpe is non-Markovian: it depends on the entire path of returns and their variance, not solely on the current state and action. Instead, a Markovian step-level proxy is used that combines risk-adjusted instantaneous return, drawdown penalties, and turnover costs. This proxy is designed such that policies which maximize the cumulative discounted reward tend to exhibit higher episode-level Sharpe ratios, thereby aligning the RL objective with the traditional portfolio evaluation metric without violating the Markov property required by PPO.
+---
 
 ## Limitations
 
-- **Options Data Availability.** The DNN volatility calibration module requires a complete, daily implied volatility surface. The free-tier Polygon.io data provides delayed chains which may be incomplete for short-dated or deep out-of-the-money strikes. Production deployment should use OptionMetrics or CBOE DataShop data.
+<details>
+<summary><strong>Options Data Availability</strong></summary>
 
-- **Transaction Cost Modeling.** The backtest uses a simplified proportional transaction cost model (kappa * L1 turnover). In practice, market impact is non-linear and depends on order size, venue, and intraday timing. The current model likely understates costs for large allocations.
+The DNN volatility calibration requires a complete daily IV surface. Free-tier Polygon.io provides delayed chains that may be incomplete for short-dated or deep OTM strikes. Production deployment should use OptionMetrics or CBOE DataShop.
+</details>
 
-- **Asset Universe Scope.** The five-ETF universe is intentionally narrow to ensure data availability and clean backtesting. Extension to individual equities, international markets, or alternative asset classes requires recalibration of the PCA dimensionality, HMM state count, and RL reward coefficients.
+<details>
+<summary><strong>Transaction Cost Modeling</strong></summary>
 
-- **Regime Label Stationarity.** The HMM is trained on the full historical sample, meaning regime labels for early dates are influenced by data that would not have been available at that time. This constitutes a mild form of lookahead bias in the labeling step that is difficult to eliminate without online HMM estimation.
+The backtest uses proportional costs ($\kappa \times L_1$ turnover). Market impact is non-linear in practice and depends on order size, venue, and timing. Current model likely understates costs for large allocations.
+</details>
 
-- **RL Sample Efficiency.** PPO requires approximately one million environment steps to converge on the five-asset universe. Scaling to larger universes or higher rebalancing frequencies (intraday) would require substantially more compute and potentially more sample-efficient algorithms such as SAC or model-based RL.
+<details>
+<summary><strong>Asset Universe Scope</strong></summary>
 
-- **Synthetic Training Data for DNN.** The rBergomi calibration DNN is trained on synthetic Monte Carlo data using a simplified Bergomi-Guyon approximation. This approximation introduces model risk: if the true market dynamics deviate from the rBergomi parameterization, calibrated H and eta values may be biased.
+The five-ETF universe is intentionally narrow for clean backtesting. Extension to individual equities, international markets, or alternatives requires recalibration of PCA dimensionality, HMM state count, and RL reward coefficients.
+</details>
+
+<details>
+<summary><strong>Regime Label Stationarity</strong></summary>
+
+The HMM is trained on the full historical sample, so early-period labels are influenced by future data — a mild form of lookahead bias that is difficult to eliminate without online HMM estimation.
+</details>
+
+<details>
+<summary><strong>RL Sample Efficiency</strong></summary>
+
+PPO requires ~1M environment steps for the five-asset universe. Larger universes or higher rebalancing frequencies would need substantially more compute and potentially SAC or model-based RL.
+</details>
+
+<details>
+<summary><strong>Synthetic DNN Training Data</strong></summary>
+
+The rBergomi calibration DNN is trained on synthetic Monte Carlo data using a Bergomi-Guyon approximation. If true market dynamics deviate from the rBergomi parameterization, calibrated $H$ and $\eta$ values may be biased.
+</details>
+
+---
+
+## Roadmap
+
+- [ ] **Hierarchical Risk Parity** integration as alternative to MVO benchmark
+- [ ] **Online HMM estimation** to eliminate regime labeling lookahead bias
+- [ ] **SAC / model-based RL** for improved sample efficiency at scale
+- [ ] **Individual equity universe** with sector-level regime conditioning
+- [ ] **Almgren-Chriss market impact** model replacing proportional costs
+- [ ] **Live paper-trading** integration via Interactive Brokers API
+
+---
 
 ## References
 
-[1] H. Markowitz, "Portfolio selection," *The Journal of Finance*, vol. 7, no. 1, pp. 77–91, 1952.
+<details>
+<summary>Expand full reference list</summary>
 
-[2] J. D. Hamilton, "A new approach to the economic analysis of nonstationary time series and the business cycle," *Econometrica*, vol. 57, no. 2, pp. 357–384, 1989.
+- Markowitz, H. M. (1952). Portfolio selection. *Journal of Finance*, 7(1), 77–91.
+- Hamilton, J. D. (1989). A new approach to the economic analysis of nonstationary time series. *Econometrica*, 57(2), 357–384.
+- Ang, A. & Bekaert, G. (2002). International asset allocation with regime shifts. *Review of Financial Studies*, 15(4), 1137–1187.
+- Michaud, R. O. (1989). The Markowitz optimization enigma. *Financial Analysts Journal*, 45(1), 31–42.
+- Gatheral, J., Jaisson, T. & Rosenbaum, M. (2018). Volatility is rough. *Quantitative Finance*, 18(6), 933–949.
+- Bayer, C., Friz, P. & Gatheral, J. (2016). Pricing under rough volatility. *Quantitative Finance*, 16(6), 887–904.
+- Horvath, B., Jacquier, A. & Muguruza, C. (2021). Deep learning volatility. *Applied Mathematical Finance*, 28(6), 499–521.
+- Lopez de Prado, M. (2018). *Advances in Financial Machine Learning*. Wiley.
+- Gu, S., Kelly, B. & Xiu, D. (2020). Empirical asset pricing via machine learning. *Review of Financial Studies*, 33(5), 2223–2273.
+- Schulman, J. et al. (2017). Proximal policy optimization algorithms. arXiv:1707.06347.
+- Liang, Z. et al. (2018). Adversarial deep reinforcement learning in portfolio management. arXiv:1808.09940.
+- Nystrup, P. et al. (2020). Dynamic portfolio optimization across hidden market regimes. *Quantitative Finance*, 20(1), 83–95.
 
-[3] A. Ang and G. Bekaert, "International asset allocation with regime shifts," *The Review of Financial Studies*, vol. 15, no. 4, pp. 1137–1187, 2002.
+</details>
 
-[4] R. O. Michaud, "The Markowitz optimization enigma: Is optimized optimal?" *Financial Analysts Journal*, vol. 45, no. 1, pp. 31–42, 1989.
-
-[5] J. Gatheral, T. Jaisson, and M. Rosenbaum, "Volatility is rough," *Quantitative Finance*, vol. 18, no. 6, pp. 933–949, 2018.
-
-[6] C. Bayer, P. Friz, and J. Gatheral, "Pricing under rough volatility," *Quantitative Finance*, vol. 16, no. 6, pp. 887–904, 2016.
-
-[7] B. Horvath, A. Jacquier, and C. Muguruza, "Deep learning volatility," *Applied Mathematical Finance*, vol. 28, no. 6, pp. 499–521, 2021. arXiv:1901.09647.
-
-[8] M. Lopez de Prado, *Advances in Financial Machine Learning*. Hoboken, NJ: Wiley, 2018.
-
-[9] S. Gu, B. Kelly, and D. Xiu, "Empirical asset pricing via machine learning," *The Review of Financial Studies*, vol. 33, no. 5, pp. 2223–2273, 2020.
-
-[10] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov, "Proximal policy optimization algorithms," arXiv:1707.06347, 2017.
-
-[11] Z. Liang, H. Chen, J. Zhu, K. Jiang, and Y. Li, "Adversarial deep reinforcement learning in portfolio management," arXiv:1808.09940, 2018.
-
-[12] P. Nystrup, B. W. Hansen, H. O. Larsen, H. Madsen, and E. Lindstrom, "Dynamic portfolio optimization across hidden market regimes," *Quantitative Finance*, vol. 20, no. 1, pp. 83–95, 2020.
+---
 
 ## License and Citation
 
-This project is released under the MIT License. See `LICENSE` for details.
-
-If you reference this project in academic or professional work, please cite:
+This project is released under the **MIT License**.
 
 ```text
 Cardozo, F. (2024). RAMPA: Regime-Aware Multi-Agent Portfolio Allocator.
-Emory University. Available at: https://github.com/<username>/rampa
+Emory University. https://github.com/FelipeCardozo0/RAMPA-Regime-Aware-Multi-Agent-Portfolio-Allocator
 ```
 
+---
+
+<p align="center">
+  <sub>Built by <a href="https://github.com/FelipeCardozo0">Felipe Cardozo</a> · Emory University</sub>
+</p>
