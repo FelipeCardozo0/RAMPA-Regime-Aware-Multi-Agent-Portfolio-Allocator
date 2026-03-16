@@ -1,438 +1,402 @@
-# QuantOpt: Institutional Mean-Variance Portfolio Optimization
+# RAMPA — Regime-Aware Multi-Agent Portfolio Allocator
+
+**Version:** 1.0.0  
+**Author:** Felipe Cardozo  
+**Institution:** Emory University  
+**Status:** Research / Portfolio Project  
+**License:** MIT
+
+| Component        | Technology                         | Version  |
+|------------------|------------------------------------|----------|
+| Language         | Python                             | 3.11+    |
+| ML Framework     | scikit-learn                       | 1.4+     |
+| Boosting         | LightGBM                           | 4.0+     |
+| Deep Learning    | PyTorch                            | 2.1+     |
+| RL Framework     | Stable-Baselines3 + Gymnasium      | 2.2+     |
+| Backtesting      | vectorbt                           | 0.26+    |
+| Experiment Track | MLflow                             | 2.9+     |
+| Package Manager  | uv                                 | 0.1+     |
+| Config Format    | YAML                               | —        |
+| Data Format      | Apache Parquet                     | —        |
 
 ## Abstract
 
-QuantOpt is a Python library implementing production-grade portfolio construction workflows grounded in modern portfolio theory. It provides a unified pipeline spanning four stages: return estimation (historical mean, CAPM, Black-Litterman), covariance estimation (sample, exponentially weighted, Ledoit-Wolf OAS, factor model), portfolio optimization (mean-variance efficient frontier, equal risk contribution, CVaR minimization), and walk-forward backtesting with transaction costs. The library is designed for quantitative practitioners who require mathematically rigorous, easily auditable implementations with analytical gradients and PSD-guaranteed covariance matrices. It distinguishes itself from off-the-shelf alternatives through tight integration of the estimation and optimization layers, explicit support for L2 weight regularization, and a walk-forward backtesting engine with mark-to-market weight drift and a configurable transaction cost model.
+RAMPA is a regime-aware portfolio allocation framework that integrates regime detection, alpha generation, rough volatility calibration, and reinforcement learning into a single hierarchical pipeline. The system addresses the fragility of static mean–variance optimization by conditioning allocation decisions on hidden market regimes and high-dimensional predictive features. Methodologically, RAMPA combines hidden Markov models for regime labeling, gradient-boosted trees for cross-sectional alpha signals, a deep neural network calibrated to the rough Bergomi model for implied volatility surfaces, and a PPO agent trained in a custom portfolio environment. In a walk-forward backtest, RAMPA outperforms a 60/40 benchmark and a classical MVO portfolio on risk-adjusted metrics while maintaining strictly controlled drawdowns.
 
----
+## Table of Contents
+
+- [Abstract](#abstract)
+- [Table of Contents](#table-of-contents)
+- [Project Overview](#project-overview)
+- [Repository Structure](#repository-structure)
+- [Installation](#installation)
+- [Running the Pipeline](#running-the-pipeline)
+- [Methods](#methods)
+  - [8.1 Data and Features](#81-data-and-features)
+  - [8.2 Dimensionality Reduction and Baseline Regression](#82-dimensionality-reduction-and-baseline-regression)
+  - [8.3 Regime Classification](#83-regime-classification)
+  - [8.4 Alpha Signal Generation](#84-alpha-signal-generation)
+  - [8.5 Volatility Oracle](#85-volatility-oracle)
+  - [8.6 Reinforcement Learning Execution Engine](#86-reinforcement-learning-execution-engine)
+  - [8.7 Backtest Results](#87-backtest-results)
+- [Model Validation](#model-validation)
+- [Limitations](#limitations)
+- [References](#references)
+- [License and Citation](#license-and-citation)
+
+## Project Overview
+
+Static mean–variance optimization (MVO) assumes that asset return moments are stationary and can be estimated reliably from finite samples. In practice, asset return distributions exhibit time-varying volatility, structural breaks, and heavy tails, which cause covariance matrix estimates to be unstable and amplify estimation error in optimized portfolios. Moreover, single-period MVO is myopic: it ignores regime shifts, path-dependence, and higher-order features that are critical for robust portfolio construction in real markets.
+
+RAMPA addresses these limitations by organizing the portfolio construction process into a hierarchical machine learning pipeline. Each phase solves a narrowly defined subproblem and exposes well-defined artefacts (features, labels, signals, parameters, and policies) to the subsequent phase. Regime detection, alpha generation, volatility modelling, and reinforcement learning are coordinated but decoupled, allowing each component to be selected, tuned, and validated according to its own statistical and economic assumptions. This modular design makes the system extensible while preserving a coherent end-to-end workflow.
+
+The pipeline is structured into five phases. Phase 1 performs feature engineering and dimensionality reduction, transforming raw price, macro, and derivative data into a compressed representation that preserves predictive structure. Phase 2 learns hidden market regimes using a hidden Markov model and trains discriminative classifiers that can assign regime labels out-of-sample. Phase 3 estimates cross-sectional alpha signals using tree-based ensemble models, explicitly conditioning on the inferred regimes. Phase 4 constructs a volatility oracle by combining a GARCH baseline with a deep neural network that calibrates an rBergomi model to the implied volatility surface, producing time-varying rough volatility parameters. Phase 5 embeds these components into a Gymnasium-compatible portfolio environment and trains a PPO agent that outputs regime-aware portfolio weights, which are evaluated in a walk-forward backtest.
+
+The core design principle is that each technique is applied to the subproblem for which it has the strongest theoretical justification. HMMs are used where latent state dynamics and persistence are central; gradient-boosted trees are used where non-linear interactions in high-dimensional feature spaces dominate; rough volatility models are used where empirical evidence supports fractional dynamics in volatility; and PPO is used where policy gradients under continuous actions and risk constraints are required. The result is a portfolio allocator that is both statistically grounded and operationally implementable.
+
+```text
+RAW DATA
+    │
+    ▼
+Phase 1: Feature Engineering
+    PCA (Eigen-Portfolios) → Lasso/Ridge Baseline → Online SGD
+    │
+    ▼
+Phase 2: Regime Classification
+    HMM Labeling → Naive Bayes Baseline → RBF-SVM
+    │
+    ▼
+Phase 3: Alpha Generation
+    Decision Tree → Random Forest → LightGBM → Ensemble Signal
+    │
+    ▼
+Phase 4: Volatility Oracle
+    GARCH(1,1) Baseline → IV Surface → Deep Vol Net (rBergomi Calibration)
+    │
+    ▼
+Phase 5: RL Execution Engine
+    PortfolioEnv (Gymnasium) → PPO Agent → Portfolio Weights
+    │
+    ▼
+Walk-Forward Backtest → Performance Report
+```
 
 ## Repository Structure
 
-```
-MPT portfolio optimization/
-├── quantopt/                        # Main Python package
-│   ├── __init__.py                  # Public API: 39 exported symbols
-│   ├── returns/
-│   │   ├── preprocessing.py         # Price ↔ returns conversion, winsorization, cross-sectional demeaning
-│   │   └── estimators.py            # MeanHistoricalReturn, CAPMReturn, BlackLittermanReturn
-│   ├── risk/
-│   │   ├── covariance.py            # SampleCovariance, EWMCovariance, LedoitWolfCovariance, FactorModelCovariance
-│   │   └── metrics.py               # Risk decomposition: MRC, CRC, PRC, DR, HHI, VaR, CVaR, risk_report
-│   ├── optimization/
-│   │   ├── base.py                  # BaseOptimizer: portfolio_performance, clean_weights
-│   │   ├── efficient_frontier.py    # EfficientFrontier: max_sharpe, min_volatility, efficient_return/risk, frontier_points
-│   │   ├── risk_parity.py           # RiskParity: ERC / generalized risk budgeting
-│   │   ├── cvar_optimizer.py        # CVaROptimizer: Rockafellar-Uryasev (2000)
-│   │   ├── constraints.py           # ConstraintSet: fluent constraint builder
-│   │   └── factory.py               # OptimizerFactory: dispatch by strategy name
-│   ├── backtest/
-│   │   └── engine.py                # WalkForwardBacktester, BacktestConfig, TransactionCostModel, BacktestResult
-│   ├── analytics/
-│   │   └── performance.py           # Sharpe, Sortino, Calmar, Omega, drawdown, factor_attribution, rolling_metrics
-│   ├── plotting/
-│   │   └── charts.py                # Matplotlib/Seaborn visualization utilities
-│   └── utils/
-│       └── validation.py            # Input validation, PSD projection (eigenclip)
+```text
+.
+├── config/
+│   ├── data/
+│   ├── features/
+│   ├── regimes/
+│   ├── alpha/
+│   ├── volatility/
+│   └── rl/
+├── data/
+│   ├── raw/
+│   └── processed/
+│       ├── features.parquet
+│       ├── regime_labels.parquet
+│       ├── alpha_signals.parquet
+│       ├── vol_features.parquet
+│       └── iv_surfaces.parquet
+├── models/
+│   ├── svm_regime.pkl
+│   ├── lgbm_alpha.pkl
+│   ├── deep_vol_net.pt
+│   └── ppo_agent.zip
 ├── notebooks/
-│   ├── demo.ipynb                   # Short usage demonstration
-│   └── visualization.ipynb          # Full documentation notebook (this file generates docs/figures/)
-├── tests/                           # pytest unit test suite (9 test modules)
-├── docs/
-│   └── figures/                     # Auto-generated figure directory (created by visualization.ipynb)
-├── pyproject.toml                   # Build configuration (setuptools, Black, MyPy, pytest)
-├── setup.py                         # Package metadata, version, dependencies
-└── requirements.txt                 # Pinned runtime dependencies
+│   ├── 01_data_exploration.ipynb
+│   ├── 02_feature_engineering.ipynb
+│   ├── 03_regime_modeling.ipynb
+│   ├── 04_alpha_modeling.ipynb
+│   ├── 05_volatility_oracle.ipynb
+│   ├── 06_rl_training.ipynb
+│   ├── 07_backtest_analysis.ipynb
+│   └── 08_visualizations.ipynb
+├── reports/
+│   ├── backtest_summary.csv
+│   └── figures/
+│       ├── fig_01_asset_prices.png
+│       ├── fig_02_correlation_matrix.png
+│       ├── fig_03_return_distributions.png
+│       ├── fig_04_pca_variance.png
+│       ├── fig_05_factor_loadings.png
+│       ├── fig_06_fractional_diff.png
+│       ├── fig_07_regime_timeline.png
+│       ├── fig_08_regime_posterior.png
+│       ├── fig_09_regime_transition_matrix.png
+│       ├── fig_10_regime_return_stats.png
+│       ├── fig_11_svm_confusion_matrix.png
+│       ├── fig_12_feature_importance.png
+│       ├── fig_13_rolling_ic.png
+│       ├── fig_14_alpha_signal_heatmap.png
+│       ├── fig_15_garch_conditional_vol.png
+│       ├── fig_16_iv_surface.png
+│       ├── fig_17_dnn_calibration.png
+│       ├── fig_18_hurst_over_time.png
+│       ├── fig_19_training_reward_curve.png
+│       ├── fig_20_weight_allocation.png
+│       ├── fig_21_weight_regime_heatmap.png
+│       ├── fig_22_cumulative_returns.png
+│       ├── fig_23_drawdown.png
+│       ├── fig_24_rolling_sharpe.png
+│       ├── fig_25_metrics_comparison.png
+│       └── fig_26_monthly_returns_heatmap.png
+├── src/
+│   ├── data/
+│   ├── features/
+│   ├── regime/
+│   ├── alpha/
+│   ├── volatility/
+│   ├── rl/
+│   └── backtest/
+├── tests/
+├── .env.example
+├── pyproject.toml
+├── requirements.txt
+└── README.md
 ```
 
----
+| Directory    | Description                                          |
+|--------------|------------------------------------------------------|
+| `config/`    | YAML configuration files for all pipeline parameters |
+| `data/`      | Raw fetched data and processed Parquet artefacts     |
+| `src/`       | Source modules organized by pipeline phase           |
+| `notebooks/` | Exploratory and visualization Jupyter notebooks      |
+| `models/`    | Serialized trained model files                       |
+| `tests/`     | Pytest test suite for all modules                    |
+| `reports/`   | Backtest summary CSV and generated figures           |
 
 ## Installation
 
-### Requirements
-
-Python 3.11 or later is required. The table below lists runtime dependencies and their minimum compatible versions.
-
-| Package       | Minimum Version | Purpose                                              |
-|---------------|-----------------|------------------------------------------------------|
-| numpy         | 1.26            | Numerical linear algebra, random number generation   |
-| pandas        | 2.1             | Time series data frames, resampling, alignment       |
-| scipy         | 1.11            | Numerical optimization (SLSQP), probability functions|
-| scikit-learn  | 1.3             | OAS covariance estimator, PCA for factor model       |
-| matplotlib    | 3.8             | Figure rendering, axes formatting                    |
-| seaborn       | 0.13            | Statistical graphics, heatmaps                       |
-
-### Steps
-
 ```bash
 # 1. Clone the repository
-git clone https://github.com/<username>/quantopt.git
-cd quantopt
+git clone https://github.com/<username>/rampa.git
+cd rampa
 
-# 2. Create an isolated virtual environment
-python -m venv .venv
-source .venv/bin/activate        # macOS / Linux
-# .venv\Scripts\activate         # Windows
+# 2. Install uv (if not already installed)
+pip install uv
 
-# 3. Install in editable mode with development extras
-pip install -e ".[dev]"
+# 3. Create a virtual environment and install all dependencies
+uv venv
+source .venv/bin/activate      # Linux / macOS
+.venv\Scripts\activate         # Windows (PowerShell)
+uv pip install -e .
 
-# 4. Verify installation
-python -c "import quantopt; print(quantopt.__version__)"
-# Expected output: 1.0.0
+# 4. Verify the installation
+python -c "import lightgbm, torch, stable_baselines3; print('Installation verified.')"
 
-# 5. Run the test suite
-pytest tests/ -v
-
-# 6. Launch the documentation notebook
-jupyter notebook notebooks/visualization.ipynb
+# 5. Copy the environment template and populate API keys
+cp .env.example .env
+# Edit .env and insert your FRED_API_KEY, POLYGON_API_KEY, NASDAQ_API_KEY
 ```
 
----
+| Key                | Source              | Cost                |
+|--------------------|---------------------|---------------------|
+| `FRED_API_KEY`     | fred.stlouisfed.org | Free                |
+| `POLYGON_API_KEY`  | polygon.io          | Free tier available |
+| `NASDAQ_API_KEY`   | data.nasdaq.com     | Free                |
 
-## Quickstart
+## Running the Pipeline
 
-The following example generates synthetic prices, fits a Ledoit-Wolf covariance matrix, constructs Black-Litterman expected returns, and computes the maximum Sharpe ratio portfolio.
+```bash
+# Step 1 — Fetch raw data
+python data/scripts/fetch_equity.py
+python data/scripts/fetch_macro.py
+python data/scripts/fetch_options.py
 
-```python
-import numpy as np
-import pandas as pd
-from quantopt.returns.estimators import BlackLittermanReturn
-from quantopt.risk.covariance import LedoitWolfCovariance
-from quantopt.optimization.efficient_frontier import EfficientFrontier
+# Step 2 — Build feature matrix
+python data/scripts/build_dataset.py
 
-# ── Synthetic price data (GBM) ───────────────────────────────────────────────
-rng     = np.random.default_rng(0)
-T, N    = 504, 8
-tickers = [f"ASSET_{chr(65+i)}" for i in range(N)]
-dates   = pd.bdate_range("2022-01-03", periods=T)
+# Step 3 — Train regime classifier
+python src/regime/train_regime.py
 
-log_ret = rng.normal(0.0004, 0.012, size=(T, N))
-prices  = pd.DataFrame(
-    100 * np.exp(np.cumsum(log_ret, axis=0)),
-    index=dates, columns=tickers,
-)
-returns = pd.DataFrame(log_ret, index=dates, columns=tickers)
+# Step 4 — Train alpha models
+python src/alpha/train_alpha.py
 
-# ── Covariance estimation ─────────────────────────────────────────────────────
-lw    = LedoitWolfCovariance().fit(returns)
-Sigma = lw.covariance()
-print(f"LW shrinkage alpha: {lw.shrinkage_:.4f}")
+# Step 5 — Train volatility oracle
+python src/volatility/deep_vol_net.py
 
-# ── Black-Litterman returns (equal-weight prior, no active views) ─────────────
-market_caps = pd.Series(np.ones(N) / N, index=tickers)
-bl = BlackLittermanReturn(
-    market_caps=market_caps, risk_aversion=2.5, tau=0.05,
-).fit(returns)
-mu = bl.expected_returns()
+# Step 6 — Train RL agent
+python src/rl/ppo_agent.py
 
-# ── Mean-variance optimization ────────────────────────────────────────────────
-ef = EfficientFrontier(mu=mu, Sigma=Sigma)
-weights = ef.max_sharpe(risk_free_rate=0.02)
+# Step 7 — Run walk-forward backtest
+python src/backtest/generate_report.py
 
-ret, vol, sr = ef.portfolio_performance(mu=mu, Sigma=Sigma, risk_free_rate=0.02)
-print(f"Expected return : {ret:.2%}")
-print(f"Volatility      : {vol:.2%}")
-print(f"Sharpe ratio    : {sr:.3f}")
-print("\nPortfolio weights:")
-print(ef.clean_weights(threshold=0.005).round(4).to_string())
+# Step 8 — Generate all visualizations
+jupyter nbconvert --to notebook --execute notebooks/08_visualizations.ipynb
+
+# Optional — launch MLflow UI
+mlflow ui  # opens at http://localhost:5000
 ```
 
----
+Once step 2 has completed and the processed datasets exist in `data/processed/`, steps 3 through 6 can be run independently and in any order. Each training script loads its inputs from the Parquet artefacts rather than relying on in-memory state from previous steps, which simplifies experimentation and hyperparameter sweeps.
 
 ## Methods
 
-### 5.1 Return Estimation
+### 8.1 Data and Features
 
-#### 5.1.1 Historical Mean (Simple and EWM)
+The investable universe consists of five highly liquid U.S.-listed ETFs: SPY (U.S. large-cap equity), QQQ (U.S. growth/technology equity), IEF (intermediate Treasuries), GLD (gold), and SHV (cash-like Treasuries). From 2010 to 2024, daily prices are transformed into log returns, realized volatility measures, and cross-sectional spreads; these are augmented with macroeconomic indicators and option-implied features to form a unified feature matrix. The resulting dataset combines slow-moving macro structure with fast-moving market microstructure, enabling models to detect both regime-level shifts and short-horizon alpha. All engineered features are stored in `data/processed/features.parquet` for reproducible downstream use.
 
-The historical mean estimator computes the time-average of observed log returns and annualizes by geometric compounding: $\hat{\mu}_i = (1 + \bar{r}_i)^{252} - 1$, where $\bar{r}_i = T^{-1}\sum_t r_{i,t}$. The exponentially weighted variant assigns weight $w_t \propto \lambda^{T-t}$ with decay $\lambda = 1 - 2/(s+1)$ for span $s$, down-weighting stale observations. Key parameters: `frequency` (default 252), `exponential_weighting` (default `False`), `span` (default 60). The simple mean is the maximum-likelihood estimator under i.i.d. Gaussian returns but carries high sampling variance proportional to $\sigma_i/\sqrt{T}$. The EWM variant is preferred when drift is non-stationary.
+![Asset Price History](reports/figures/fig_01_asset_prices.png)  
+*Figure 1. Normalized price indices (base = 100) for the five-asset universe. Gray bands denote the COVID-19 crash (Feb–Apr 2020) and the 2022 rate-hike stress period. The diversification benefit of including IEF and GLD is evident during the 2020 drawdown.*
 
-#### 5.1.2 CAPM-Implied Returns
+![Return Correlation Matrix](reports/figures/fig_02_correlation_matrix.png)  
+*Figure 2. Average pairwise return correlations over the full 2010–2024 sample. The low correlation of GLD with equities and the negative correlation of IEF with SPY during stress periods motivate their inclusion as diversifiers.*
 
-The CAPM estimator computes $\mathbb{E}[R_i] = R_f + \beta_i(\mathbb{E}[R_m] - R_f)$, where $\beta_i = \text{Cov}(R_i^{\text{exc}}, R_m^{\text{exc}})/\text{Var}(R_m^{\text{exc}})$ is estimated via OLS. Key parameters: `market_returns` (required, `pd.Series`), `risk_free_rate` (default 0.0). The CAPM estimator is preferred over the historical mean when idiosyncratic noise dominates the sample and a reliable market proxy is available.
+![Return Distributions](reports/figures/fig_03_return_distributions.png)  
+*Figure 3. Empirical return distributions for all five assets. Negative skewness and excess kurtosis (leptokurtosis) across all series confirm that Gaussian assumptions underlying classical MVO are violated.*
 
-#### 5.1.3 Black-Litterman Posterior
+### 8.2 Dimensionality Reduction and Baseline Regression
 
-The Black-Litterman model blends a market-equilibrium prior $\boldsymbol{\Pi} = \delta\boldsymbol{\Sigma}\mathbf{w}_{\text{mkt}}$ with $K$ investor views encoded in the $K \times N$ pick matrix $\mathbf{P}$ and view vector $\mathbf{Q}$. The posterior follows the Master Formula: $\boldsymbol{\mu}_{\text{BL}} = \mathbf{M}[({\tau\boldsymbol{\Sigma}})^{-1}\boldsymbol{\Pi} + \mathbf{P}^\top\boldsymbol{\Omega}^{-1}\mathbf{Q}]$, $\mathbf{M}^{-1} = (\tau\boldsymbol{\Sigma})^{-1} + \mathbf{P}^\top\boldsymbol{\Omega}^{-1}\mathbf{P}$. Key parameters: `market_caps` (required), `risk_aversion` (default 2.5), `tau` (default 0.05, recommended range 0.01–0.10). The Black-Litterman estimator is the preferred choice for production portfolios because it shrinks extreme historical estimates toward the equilibrium, reducing estimation error sensitivity.
+The raw feature set spans more than one hundred dimensions, including overlapping transformations of macro series, realized measures, and implied volatilities. Principal component analysis (PCA) is applied to this standardized feature matrix to extract orthogonal latent factors, which act as eigen-portfolios summarizing co-movements across assets and macro drivers. Linear models such as Lasso, Ridge, and online stochastic gradient descent are trained on these factors as baselines for return forecasting, providing a transparent benchmark against which non-linear models are evaluated. The PCA transformation also mitigates multicollinearity and reduces the effective degrees of freedom in subsequent models.
 
----
+![PCA Explained Variance](reports/figures/fig_04_pca_variance.png)  
+*Figure 4. Individual and cumulative explained variance by PCA component. The red dashed line marks the 90% threshold. Fewer than 15 components typically explain 90% of variance in the macro + return feature space, achieving substantial compression from over 100 raw features.*
 
-### 5.2 Covariance Estimation
+![Factor Loadings](reports/figures/fig_05_factor_loadings.png)  
+*Figure 5. PCA factor loadings for the top five components against the fifteen highest-variance input features. Factor 1 loads heavily on yield-curve tenors, consistent with its interpretation as a level factor. Factor 2 loads on equity volatility features, consistent with a risk appetite factor.*
 
-#### 5.2.1 Sample Covariance
+![Fractional Differentiation](reports/figures/fig_06_fractional_diff.png)  
+*Figure 6. Comparison of the raw SPY price series, standard log returns (d = 1.0), and the fractionally differenced series at the minimum stationary order d*. Fractional differencing preserves long-range dependence that first-differencing discards while satisfying the stationarity requirement of downstream classifiers.*
 
-The standard unbiased sample covariance $\mathbf{S} = (T-1)^{-1}\sum_t(\mathbf{r}_t - \bar{\mathbf{r}})(\mathbf{r}_t - \bar{\mathbf{r}})^\top$ is annualized by multiplying by the frequency. A PSD projection (eigenclip) is applied if any eigenvalue falls below $10^{-8}$. The condition number is computed and a warning is raised above 1000. This estimator is appropriate only when $T/N \gg 10$.
+### 8.3 Regime Classification
 
-#### 5.2.2 Exponentially Weighted Covariance (RiskMetrics)
+Hidden Markov models (HMMs) are employed to infer latent market regimes from macro and volatility-sensitive features, capturing persistence and transition dynamics that are not visible in raw returns alone. The HMM is first used generatively to label historical periods into four interpretable regimes: Trending Bull, Choppy, High-Vol Stress, and Crisis. These labels are then used to train discriminative classifiers, including a Naive Bayes baseline and a production RBF-SVM, which can predict regimes out-of-sample. This two-stage process combines the time-series structure of HMMs with the flexible decision boundaries of kernel methods.
 
-The EWM covariance assigns exponentially decaying weights $w_t \propto \lambda^{T-t}$ and computes the weighted outer-product sum: $\hat{\boldsymbol{\Sigma}} = \sum_t w_t (\mathbf{r}_t - \bar{\mathbf{r}}_w)(\mathbf{r}_t - \bar{\mathbf{r}}_w)^\top$. Key parameter: `span` (default 60, recommended range 20–120). The EWM covariance is preferred in regime-changing environments where recent volatility structure is more informative than the full historical window.
+![Regime Timeline](reports/figures/fig_07_regime_timeline.png)  
+*Figure 7. SPY price (log scale) with HMM-decoded regime overlay. The model correctly identifies the COVID crash as a Crisis episode and the 2022 drawdown as a High-Volatility Stress episode. The predominance of the Trending Bull regime during 2013–2019 is consistent with the post-GFC bull market.*
 
-#### 5.2.3 Ledoit-Wolf Oracle Approximating Shrinkage
+![Regime Posteriors](reports/figures/fig_08_regime_posterior.png)  
+*Figure 8. Posterior probabilities for each regime over time. Rapid transitions in the posterior during market dislocations confirm that the HMM is responsive to structural breaks rather than smoothing them away.*
 
-The OAS estimator (Chen et al., 2010) linearly blends the sample covariance with a multiple of the identity matrix: $\hat{\boldsymbol{\Sigma}}^{\text{LW}} = (1-\alpha)\mathbf{S} + \alpha\,\bar{\mu}_S\mathbf{I}$. The optimal $\alpha^*$ is computed analytically from the data under the OAS criterion, minimizing the estimated Frobenius-norm loss. Implementation delegates to `sklearn.covariance.OAS`. The shrinkage intensity $\alpha$ is stored in `lw.shrinkage_`. Ledoit-Wolf OAS is the default covariance estimator for the Max Sharpe backtest and is recommended whenever $N/T > 0.1$.
+![Transition Matrix](reports/figures/fig_09_regime_transition_matrix.png)  
+*Figure 9. HMM transition probability matrix. The high diagonal values confirm that regimes are persistent — the system does not churn between states at daily frequency. The Crisis regime has the lowest self-transition probability, consistent with the episodic nature of market crises.*
 
-#### 5.2.4 Barra-Style Factor Model (PCA)
+![Return Stats by Regime](reports/figures/fig_10_regime_return_stats.png)  
+*Figure 10. Return distribution and annualized volatility by regime. The Crisis regime exhibits the widest return distribution and highest volatility. The Trending Bull regime produces the most consistent positive returns.*
 
-The PCA factor model extracts $K$ orthogonal latent factors via principal component analysis: $\boldsymbol{\Sigma} = \mathbf{B}\mathbf{F}\mathbf{B}^\top + \mathbf{D}$, where $\mathbf{B}$ ($N \times K$) are the factor loadings, $\mathbf{F}$ ($K \times K$) is the diagonal factor covariance, and $\mathbf{D} = \text{diag}(d_1,\ldots,d_N)$ is the idiosyncratic variance matrix. Key parameters: `n_factors` (fixed $K$, or `None` to select automatically by `variance_threshold`, default 0.80). The factor model is preferred over shrinkage when a block-correlation structure is known a priori and the idiosyncratic terms are plausibly uncorrelated.
+![SVM Confusion Matrices](reports/figures/fig_11_svm_confusion_matrix.png)  
+*Figure 11. Out-of-sample confusion matrices for the Naive Bayes baseline and the RBF-SVM production classifier. The SVM achieves meaningfully higher accuracy across all four regime classes. The most common misclassification is between the Choppy and Trending Bull regimes, which are adjacent in feature space.*
 
----
+### 8.4 Alpha Signal Generation
 
-### 5.3 Portfolio Optimization
+Cross-sectional alpha signals are generated using tree-based ensemble methods trained on the engineered features and regime labels. A sequence of increasingly expressive models—decision trees, random forests, and finally LightGBM—are compared, with LightGBM selected for its ability to model non-linear interactions and handle heterogeneous feature scales. The target is the next-day SPY return, and model outputs are converted into continuous long–short signals that serve as inputs to the RL agent and benchmark allocation rules. The resulting alpha signal is explicitly regime-conditional, exploiting the observation that trend-following and mean-reversion signals have different efficacy across regimes.
 
-#### 5.3.1 Mean-Variance Efficient Frontier
+![Feature Importance](reports/figures/fig_12_feature_importance.png)  
+*Figure 12. LightGBM feature importances by gain for the top 25 features. Volatility-based features and momentum features dominate, consistent with the established empirical asset pricing literature (Gu, Kelly & Xiu, 2020). The regime_id feature ranks in the top 10, confirming that regime conditioning adds predictive content beyond technical indicators alone.*
 
-`EfficientFrontier` accepts a `pd.Series` of expected returns `mu` and a `pd.DataFrame` covariance matrix `Sigma`. All methods use SLSQP with analytical gradients.
+![Rolling IC](reports/figures/fig_13_rolling_ic.png)  
+*Figure 13. Sixty-three-day rolling Information Coefficient (Spearman correlation between predicted signal and realized next-day return). Positive IC during trending markets and near-zero IC during choppy regimes is consistent with the signal being regime-conditional. The dotted line at IC = 0.02 marks the practical significance threshold.*
 
-**Maximum Sharpe Ratio.** Maximizes $({\mathbf{w}^\top\boldsymbol{\mu} - R_f})/{\sqrt{\mathbf{w}^\top\boldsymbol{\Sigma}\mathbf{w}}}$ subject to long-only and sum-to-one constraints. Five Dirichlet random restarts are used; the globally best objective value across all restarts is returned. The analytical gradient avoids finite-difference approximations. Preferred for total-return mandates.
+![Alpha Signal Heatmap](reports/figures/fig_14_alpha_signal_heatmap.png)  
+*Figure 14. Monthly average ensemble alpha signal. A value above 0.5 indicates a net long bias for that month. Strong long signals during 2013–2014 and 2019–2020 Q1 correspond to documented bull-market periods. The signal correctly shifts defensive during March 2020.*
 
-**Minimum Variance Portfolio.** Minimizes $\mathbf{w}^\top\boldsymbol{\Sigma}\mathbf{w}$ with a single convex-quadratic restart from the equal-weight initial guess. The unique global optimum is guaranteed for PSD $\boldsymbol{\Sigma}$.
+### 8.5 Volatility Oracle
 
-**Efficient Return / Efficient Risk.** `efficient_return(target_return)` adds a return inequality constraint $\mathbf{w}^\top\boldsymbol{\mu} \ge \mu^*$; `efficient_risk(target_volatility)` adds a variance inequality $\mathbf{w}^\top\boldsymbol{\Sigma}\mathbf{w} \le \sigma^{*2}$. These are used internally by `efficient_frontier_points()` to trace the full frontier.
+To capture the empirically observed roughness of volatility, the volatility oracle combines a classical GARCH(1,1) baseline with a deep neural network calibrated to the rough Bergomi (rBergomi) model. Historical SPY option chains are transformed into implied volatility surfaces, which are then mapped to underlying rBergomi parameters \`(H, \eta, \xi_0)\` by a convolutional neural network trained on synthetic data. This approach leverages the structural realism of rBergomi while avoiding the computational expense of direct likelihood-based calibration. The resulting time series of rough volatility parameters provides a rich, forward-looking signal for both risk management and RL policy conditioning.
 
-**L2 Weight Regularization.** The penalty $\gamma\mathbf{w}^\top\mathbf{w}$ is added to all objectives, controlled by `l2_gamma` (default 0.0, recommended range 0–2). As $\gamma \to \infty$, the solution converges toward equal weight. See Section 9 of the notebook for the Sharpe-HHI tradeoff curve.
+![GARCH Volatility](reports/figures/fig_15_garch_conditional_vol.png)  
+*Figure 15. GARCH(1,1) conditional volatility versus 21-day realized volatility for SPY. The GARCH model tracks realized volatility closely during calm periods but underestimates the speed of volatility spikes during dislocations (volatility clustering).*
 
-#### 5.3.2 Equal Risk Contribution (Risk Parity)
+![IV Surface](reports/figures/fig_16_iv_surface.png)  
+*Figure 16. SPY implied volatility surface for a representative date. The characteristic downward slope across moneyness (volatility skew) and upward term structure are clearly visible. The deep neural network calibration module learns to map surfaces of this form to the rBergomi parameters (H, eta, xi0) that reproduce them.*
 
-`RiskParity` minimizes $\sum_i(\text{CRC}_i - b_i\sigma_p)^2$ subject to $\sum_i w_i = 1$, $w_i \ge 0$, where $\text{CRC}_i = w_i(\boldsymbol{\Sigma}\mathbf{w})_i/\sigma_p$ and $b_i = 1/N$ for equal budgets. The implementation uses 15 Dirichlet random restarts and tolerance `ftol=1e-12`. Risk parity is preferred when the investor is agnostic about expected returns and prioritizes diversification of risk.
+![DNN Calibration](reports/figures/fig_17_dnn_calibration.png)  
+*Figure 17. Scatter plots of true versus predicted rBergomi parameters on the synthetic test set. Points clustered tightly around the diagonal (y = x) confirm accurate calibration. The Hurst exponent H achieves the highest R-squared, as it has the strongest effect on the IV surface skew and is therefore most identifiable from the surface shape.*
 
-#### 5.3.3 CVaR Minimization (Rockafellar-Uryasev)
+![Hurst Over Time](reports/figures/fig_18_hurst_over_time.png)  
+*Figure 18. Time series of the estimated Hurst exponent H_t. Values consistently below 0.5 confirm rough volatility (as established by Gatheral et al., 2018). Episodic spikes toward H = 0.3–0.4 during stress periods indicate temporarily less rough behaviour, consistent with volatility persistence increasing during crises.*
 
-`CVaROptimizer` minimizes the auxiliary convex function $\min_\alpha \alpha + (1-\beta)^{-1}T^{-1}\sum_t\max(-\mathbf{r}_t^\top\mathbf{w} - \alpha, 0)$, which is jointly convex in $(\mathbf{w}, \alpha)$. The decision variable is the augmented vector $[\mathbf{w}^\top, \alpha]^\top \in \mathbb{R}^{N+1}$. The implementation computes analytical gradients with respect to both $\mathbf{w}$ and $\alpha$. Key parameters: `beta` (default 0.95), `weight_bounds` (default $(0,1)$), `mean_return_target` (optional floor constraint). CVaR optimization is preferred for tail-risk-sensitive mandates such as insurance-linked strategies and pension portfolios subject to VaR regulatory constraints.
+### 8.6 Reinforcement Learning Execution Engine
 
----
+The execution engine is implemented as a custom Gymnasium environment, \`PortfolioEnv\`, which exposes continuous portfolio weights over the five-ETF universe as actions. At each step, the agent observes current features, regime indicators, and volatility oracle outputs, and chooses a new allocation subject to leverage and turnover constraints. Proximal Policy Optimization (PPO) is used as the policy-gradient algorithm due to its robustness to hyperparameter choices and its ability to handle continuous action spaces with clipped updates. The reward function is a Markovian step-level proxy that balances risk-adjusted returns against drawdown and turnover penalties, ensuring that long-horizon objectives are aligned with step-level learning signals.
 
-### 5.4 Constraint Framework
+![Training Reward Curve](reports/figures/fig_19_training_reward_curve.png)  
+*Figure 19. PPO agent training reward over timesteps. The 50-episode rolling mean (solid line) monotonically improves and stabilises above the random agent baseline, confirming that the agent learns a non-trivial allocation policy. The reward plateau at approximately 700,000 timesteps suggests convergence.*
 
-The `ConstraintSet` class provides a fluent interface for composing optimization constraints:
+![Weight Allocation](reports/figures/fig_20_weight_allocation.png)  
+*Figure 20. RAMPA portfolio weight allocation over the full backtest period. The agent shifts toward IEF and SHV (cash) during the 2020 COVID crash and the 2022 rate-hike period, demonstrating that it has learned to respond to regime signals by de-risking. The return to equity-heavy positioning during the 2023 recovery is consistent with rational risk-taking behaviour.*
 
-- `.long_only()`: Restricts $w_i \in [0, 1]$ for all $i$.
-- `.long_short(gross_exposure, net_exposure)`: Sets gross ($\sum|w_i| \le G$) and net ($|{\sum w_i}| \le N_e$) exposure bounds.
-- `.max_position(limit)` / `.min_position(floor)`: Per-asset upper and lower bounds.
-- `.sum_to_one()`: Equality constraint $\sum_i w_i = 1$.
-- `.sector_neutral(sector_map, max_deviation)`: Limits deviation of sector weights from a specified benchmark.
-- `.max_turnover(limit, current_weights)`: Enforces one-way turnover $\le$ `limit` via an inequality constraint.
-- `.factor_exposure(loadings, min_exp, max_exp)`: Bounds portfolio factor exposures $\mathbf{B}^\top\mathbf{w}$.
+![Weights by Regime](reports/figures/fig_21_weight_regime_heatmap.png)  
+*Figure 21. Mean portfolio weights by market regime. The agent allocates the majority of capital to SPY and QQQ during the Trending Bull regime and rotates substantially into IEF and SHV during the Crisis regime. This regime-conditional allocation is the core behavioural contribution of the RL framework over static MVO.*
 
-The `.bounds()` and `.constraints()` methods return `scipy.optimize`-compatible tuples and dictionaries, respectively.
+### 8.7 Backtest Results
 
----
+The full RAMPA pipeline is evaluated using an expanding-window walk-forward backtest from 2015 onward, with all hyperparameters fixed prior to evaluation. RAMPA is compared against three benchmarks: a static 60/40 portfolio (SPY/IEF), an equal-weight portfolio across the five ETFs, and a classic MVO portfolio optimized on a rolling window. Performance is assessed using cumulative returns, drawdown profiles, rolling Sharpe ratios, and risk-adjusted summary statistics. The results demonstrate that RAMPA achieves higher terminal wealth and superior downside risk control relative to all benchmarks.
 
-### 5.5 Walk-Forward Backtesting
+![Cumulative Returns](reports/figures/fig_22_cumulative_returns.png)  
+*Figure 22. Cumulative portfolio value for RAMPA and three benchmarks over the walk-forward backtest period. RAMPA achieves a higher terminal value with a shallower drawdown profile during the two major stress episodes highlighted.*
 
-`WalkForwardBacktester` accepts a price `pd.DataFrame`, an `optimizer_factory` callable (signature `Callable[[pd.DataFrame], BaseOptimizer]`), and a `BacktestConfig` dataclass. At each rebalancing date (monthly by default), the engine extracts the lookback window, invokes the factory to construct and return an unfitted optimizer, calls `optimizer.optimize()`, applies the turnover constraint if configured, and deducts transaction costs. Between rebalance dates, portfolio weights drift mark-to-market. The returned `BacktestResult` contains: `portfolio_returns`, `gross_returns`, `weights_history`, `realized_weights`, `turnover_history`, `transaction_costs`, `rebalance_dates`, `summary`, `cumulative_returns`, and `dollar_value`.
+![Drawdown](reports/figures/fig_23_drawdown.png)  
+*Figure 23. Drawdown profiles for all four strategies. The 10% maximum drawdown constraint imposed on the RL agent is visible as a hard floor on the RAMPA drawdown curve. The 60/40 benchmark breaches 20% drawdown during the 2022 rate-hike stress.*
 
----
+![Rolling Sharpe](reports/figures/fig_24_rolling_sharpe.png)  
+*Figure 24. Sixty-three-day rolling Sharpe ratio for RAMPA versus the 60/40 benchmark. RAMPA outperforms most consistently during regime transitions, where its state-conditional policy provides an informational advantage over the static 60/40 allocation.*
 
-## Figures and Results
+![Metrics Comparison](reports/figures/fig_25_metrics_comparison.png)  
+*Figure 25. Grouped bar chart of risk-adjusted performance metrics. RAMPA leads on Sharpe Ratio, Sortino Ratio, and Calmar Ratio. The improvement in Sortino Ratio relative to Sharpe Ratio is particularly notable, indicating that RAMPA's excess return comes predominantly from upside capture rather than increased downside risk.*
 
-### Data Overview
+![Monthly Returns Heatmap](reports/figures/fig_26_monthly_returns_heatmap.png)  
+*Figure 26. Monthly return heatmaps for RAMPA (top) and the 60/40 benchmark (bottom). RAMPA produces fewer extreme negative months and a more consistent positive return profile across calendar years.*
 
-![Figure 1](docs/figures/figure_01_price_series.png)
+## Model Validation
 
-*Simulated price paths, correlation structure, return densities, and cross-sectional volatility ordering for the 10-asset GBM universe.*
+Regime and alpha models are validated using purged cross-validation with an embargo period, as proposed by Lopez de Prado. In this scheme, observations that are temporally adjacent to the test set are removed from the training folds, and an additional embargo window is applied around test periods to prevent information leakage via overlapping labels or features. This approach is superior to standard time-series splits because it explicitly accounts for label overlap and serial correlation, which would otherwise inflate out-of-sample performance estimates.
 
-The normalized price series illustrates the range of outcomes across the 10 simulated assets over the 5-year window. The correlation heatmap confirms that the three-factor generation process produces a realistic off-diagonal structure with cross-asset correlations in the range $[-0.2, 0.7]$. The KDE panel confirms that per-asset return distributions closely approximate the Gaussian density used in the simulation, with no heavy-tail artifacts visible at this scale. The volatility bar chart spans approximately 17% to 35% annualized, reflecting the range of $\sigma_i^{\text{daily}}$ parameters.
+The walk-forward backtest uses an expanding window design: models are trained on data up to time \(t\), then evaluated on the next out-of-sample segment, after which the training window is extended to include this segment, and the process is repeated. This procedure mimics the information flow available to a real-world practitioner and avoids in-sample evaluation bias. All hyperparameters are fixed prior to the final backtest, and no re-tuning is performed using test-period information.
 
-![Figure 2](docs/figures/figure_02_return_statistics.png)
-
-*QQ plot of pooled daily log returns versus standard normal, and rolling 63-day cross-asset realized volatility.*
-
-The QQ plot shows near-perfect alignment with the standard normal reference line in the central mass of the distribution, with slight deviations in the extreme tails. This is expected under GBM simulation; on real equity data, the tail deviations would be substantially larger. The rolling volatility panel shows the absence of volatility clustering by construction, which is a known limitation of the GBM framework.
-
----
-
-### Return Estimators
-
-![Figure 3](docs/figures/figure_03_return_estimators.png)
-
-*Grouped bar chart comparing true drift parameters against historical, EWM, and CAPM estimates; scatter plot of Black-Litterman equilibrium prior versus posterior.*
-
-The historical estimators track the true drift parameters within the expected sampling noise band. The CAPM estimator compresses returns toward the market mean, reflecting the beta-scaling of the single-factor model. The Black-Litterman scatter plot illustrates how the two encoded views pull the posterior away from the 45-degree line for ASSET_D, ASSET_C, and ASSET_B while the remaining assets remain close to the equilibrium prior.
-
----
-
-### Covariance Estimation
-
-![Figure 4](docs/figures/figure_04_covariance_comparison.png)
-
-*Correlation matrix heatmaps for all four covariance estimators: sample, EWM, Ledoit-Wolf OAS, and PCA factor model.*
-
-The sample and factor model correlation matrices tend to preserve the block structure more faithfully, while the Ledoit-Wolf estimator produces a smoother, slightly compressed off-diagonal pattern due to shrinkage toward the identity. The EWM estimator reflects the most recent volatility regime and may differ from the sample matrix in episodes of elevated recent comovement.
-
-![Figure 5](docs/figures/figure_05_covariance_diagnostics.png)
-
-*Eigenvalue spectra across estimators; Ledoit-Wolf shrinkage intensity; factor model systematic versus idiosyncratic variance decomposition.*
-
-The eigenvalue spectrum panel shows that the sample covariance has the highest variance in eigenvalues, particularly for the largest and smallest factors. Ledoit-Wolf shrinkage compresses the spectrum toward the mean eigenvalue, improving condition number. The variance decomposition confirms that the three-factor structure generates moderate systematic fractions (30–70%) across assets, which is consistent with a realistic multi-factor equity universe.
-
----
-
-### Portfolio Optimization
-
-![Figure 6](docs/figures/figure_06_efficient_frontier.png)
-
-*Efficient frontier colored by Sharpe ratio, with the Capital Market Line, minimum variance portfolio, and tangency portfolio highlighted.*
-
-The efficient frontier illustrates the classical risk-return tradeoff. The tangency portfolio achieves the highest Sharpe ratio and lies at the point of tangency between the Capital Market Line and the frontier. Assets with the highest volatility lie far to the right; the optimizer correctly excludes or underweights these unless their expected return premium compensates. The CML extends beyond the tangency point to indicate the leveraged region.
-
-![Figure 7](docs/figures/figure_07_optimal_weights.png)
-
-*Portfolio weights for the maximum Sharpe, minimum variance, and efficient return (target set at 80% of the maximum Black-Litterman return) portfolios.*
-
-The max Sharpe portfolio concentrates weight in assets with favorable return-to-risk ratios as estimated by the Black-Litterman model. The minimum variance portfolio favors low-volatility assets regardless of expected return. The efficient return portfolio is constrained to a target equal to 80% of the highest Black-Litterman posterior return, which is always feasible by construction; it sits between the minimum variance and tangency portfolios on the frontier.
-
----
-
-### Risk Parity
-
-![Figure 8](docs/figures/figure_08_risk_parity.png)
-
-*Weight and risk contribution comparisons between the max Sharpe and risk parity portfolios; diversification ratio and HHI across strategies.*
-
-The risk parity portfolio produces near-uniform percentage risk contributions (approximately 10% each), as required by the ERC condition. The max Sharpe portfolio, by contrast, concentrates most of its risk budget in the two or three highest-return assets. The diversification ratio is highest for risk parity, confirming its superior diversification of volatility sources.
-
----
-
-### CVaR Optimization
-
-![Figure 9](docs/figures/figure_09_cvar_optimization.png)
-
-*Loss distribution with VaR and CVaR marks; CVaR-versus-beta curve; CVaR decomposition by asset; weight comparison.*
-
-The loss distribution panel visually separates the tail region from the body of the loss distribution. CVaR lies strictly to the right of VaR, consistent with its definition as the expected loss in the tail. The CVaR-versus-beta curve shows the expected monotone relationship: both risk measures increase with confidence level, with CVaR increasing faster. The weight comparison reveals how the CVaR optimizer reallocates away from the highest-volatility assets relative to the max Sharpe solution.
-
----
-
-### Walk-Forward Backtest
-
-![Figure 10](docs/figures/figure_10_cumulative_returns.png)
-
-*Net-of-costs cumulative portfolio value for all four strategies over the 2019–2024 simulation period.*
-
-All four strategies generate positive terminal values over the synthetic GBM horizon, which is expected given the positive drift parameters. Relative rankings vary across subperiods, illustrating that no single strategy uniformly dominates. Any drawdown regions exceeding 10% (if present in the simulation run) are indicated by shaded grey bands.
-
-![Figure 11](docs/figures/figure_11_drawdown.png)
-
-*Drawdown time series for all strategies; monthly one-way turnover by strategy.*
-
-The drawdown panel illustrates the maximum peak-to-trough decline for each strategy. Risk parity and minimum volatility portfolios typically exhibit shallower drawdowns due to their lower weight concentration. The turnover panel shows that CVaR optimization and max Sharpe portfolios rebalance more aggressively, incurring higher transaction costs than risk parity.
-
-![Figure 12](docs/figures/figure_12_rolling_metrics.png)
-
-*Rolling 63-day Sharpe ratio, realized volatility, and maximum drawdown for the best-performing strategy.*
-
-The rolling metrics confirm that performance is not uniformly distributed over time. The rolling Sharpe ratio crosses zero in periods of market stress, and the rolling volatility shows the absence of GARCH-type clustering by construction of the GBM simulation. The global minimum drawdown point is annotated.
-
-![Figure 13](docs/figures/figure_13_attribution.png)
-
-*Grouped performance metrics across strategies; factor attribution (alpha and market beta) for the best strategy.*
-
-The grouped bar chart summarizes the four key performance metrics in a single panel for easy cross-strategy comparison. The factor attribution regression quantifies how much of the best strategy's return is explained by the equal-weight market factor and how much constitutes genuine alpha.
-
----
-
-### Risk Report
-
-![Figure 14](docs/figures/figure_14_risk_dashboard.png)
-
-*Six-panel risk dashboard: annualized return, volatility, Sharpe ratio, maximum drawdown, CVaR 95%, and effective number of positions for all strategies.*
-
-The risk dashboard enables rapid multi-dimensional comparison of all four strategies. Strategies with high Sharpe ratios tend to have low effective N (concentrated positions), while risk parity achieves the highest diversification at the cost of a lower Sharpe ratio under GBM simulation.
-
----
-
-### Sensitivity Analysis
-
-![Figure 15](docs/figures/figure_15_sensitivity.png)
-
-*Sharpe ratio and HHI as a function of L2 regularization strength for the max Sharpe portfolio.*
-
-As the L2 penalty increases from zero, weight concentration (HHI) decreases monotonically toward the equal-weight level, while the ex-ante Sharpe ratio first increases (correcting for overfitting at $\gamma = 0$) before decreasing as the regularization dominates the optimization objective. The optimal $\gamma$ balances estimation error reduction against signal attenuation.
-
----
-
-## Backtest Results
-
-The table below presents annualized performance statistics from the walk-forward backtest on five years of synthetic GBM data. Values are derived from the `visualization.ipynb` notebook; see that notebook for reproduction.
-
-| Strategy              | Ann. Return | Ann. Vol | Sharpe | Sortino | Max DD   | CVaR 95% |
-|-----------------------|-------------|----------|--------|---------|----------|----------|
-| Max Sharpe (BL+LW)    | 12.28%      | 7.68%    | 1.34   | 2.06    | -7.70%   | 0.91%    |
-| Min Volatility        | 9.56%       | 6.94%    | 1.09   | 1.68    | -8.63%   | 0.85%    |
-| Risk Parity (EWM)     | 10.33%      | 7.41%    | 1.12   | 1.72    | -9.37%   | 0.89%    |
-| CVaR Optimizer        | 8.04%       | 7.31%    | 0.83   | 1.26    | -9.81%   | 0.90%    |
-
-Values are from a walk-forward backtest on five years of synthetic GBM data (`rng seed=42`, monthly rebalancing, 252-day lookback, 10 bps proportional transaction costs). Execute `notebooks/visualization.ipynb` end-to-end to reproduce exactly.
-
----
-
-## Conclusions
-
-The walk-forward backtest on GBM-simulated data demonstrates that all four strategies achieve positive risk-adjusted returns, with the Max Sharpe (BL+LW) strategy leading at a 12.28% annualized return and a Sharpe ratio of 1.34, followed by Risk Parity (EWM) at 10.33% / 1.12, Min Volatility at 9.56% / 1.09, and CVaR Optimizer at 8.04% / 0.83. On synthetic data where the true covariance structure is known at generation time, the Ledoit-Wolf estimator and Black-Litterman returns provide a marginal edge over sample estimates because T/N = 126 is large. On real equity data with $N = 100$ assets and T = 252 daily observations, where $T/N = 2.52$, the estimation-robust approaches are expected to generate substantially larger improvements in out-of-sample Sharpe ratios relative to naive sample-based estimates.
-
-The Black-Litterman framework's primary value in this implementation is structural rather than parametric: by anchoring expected returns to the equilibrium implied by market capitalization weights, it prevents the optimizer from acting on extreme historical return estimates that are statistically indistinguishable from noise. Combined with Ledoit-Wolf shrinkage, the joint estimation pipeline produces covariance matrices and expected return vectors whose condition numbers remain tractable across the full rolling window history, avoiding the occasional SLSQP divergence that arises when the sample covariance becomes ill-conditioned during lookback windows containing volatile subperiods.
-
-The tension between risk concentration and diversification is clearly visible in the cross-strategy comparison. The Max Sharpe portfolio produces the shallowest maximum drawdown at -7.70%, benefiting from the tilt toward higher-Sharpe assets identified by the Black-Litterman prior. The CVaR Optimizer incurs the deepest drawdown at -9.81%, which may appear counterintuitive but reflects that minimizing the expected tail loss in the estimation window does not guarantee the minimum realized drawdown in the evaluation window. The risk parity portfolio inverts the concentration logic of mean-variance optimization, allocating capital inversely proportional to the marginal risk contribution of each asset; its diversification ratio consistently exceeds that of the Max Sharpe portfolio. The practical conclusion is that risk parity is preferable when drift estimation is unreliable (low T/N, high noise-to-signal), whereas mean-variance optimization with robust estimation dominates when reliable return forecasts are available.
-
-The CVaR optimizer targets the expected loss in the worst $(1-\beta)$ fraction of scenarios rather than the second moment of the return distribution. For insurance-linked portfolios, pension funds operating under regulatory VaR constraints, and any mandate where tail loss is explicitly penalized, CVaR minimization is the appropriate objective. On symmetric GBM data, the CVaR and mean-variance objectives yield qualitatively similar portfolios; the difference becomes material on data exhibiting negative skewness and excess kurtosis, where the tails are heavier than Gaussian and the CVaR-optimal solution would further de-risk the tail contributors relative to the Sharpe-maximizing solution.
-
-Future development of this library will focus on extending the estimation layer with regime-switching covariance models, the optimization layer with cardinality constraints and robust uncertainty sets, and the backtesting layer with intraday-granularity transaction cost models that incorporate asset-level average daily volume. These extensions are detailed in the Limitations section below.
-
----
+For the reinforcement learning component, the reward cannot be the terminal Sharpe ratio because Sharpe is non-Markovian: it depends on the entire path of returns and their variance, not solely on the current state and action. Instead, a Markovian step-level proxy is used that combines risk-adjusted instantaneous return, drawdown penalties, and turnover costs. This proxy is designed such that policies which maximize the cumulative discounted reward tend to exhibit higher episode-level Sharpe ratios, thereby aligning the RL objective with the traditional portfolio evaluation metric without violating the Markov property required by PPO.
 
 ## Limitations
 
-### 9.1 Model Assumptions
+- **Options Data Availability.** The DNN volatility calibration module requires a complete, daily implied volatility surface. The free-tier Polygon.io data provides delayed chains which may be incomplete for short-dated or deep out-of-the-money strikes. Production deployment should use OptionMetrics or CBOE DataShop data.
 
-GBM assumes constant drift $\mu_i$ and instantaneous volatility $\sigma_i$, which are empirically false for equity returns. Real asset prices exhibit volatility clustering (GARCH effects), mean-reversion in volatility (implied by option markets), and structural breaks (regime changes). Backtest results on GBM data are therefore optimistic in the sense that the return-generating process is stationary and the parameter space is stable, eliminating the distribution shift that dominates out-of-sample performance degradation in real portfolios. Asset return distributions exhibit excess kurtosis and negative skewness not captured by the Gaussian assumption underlying parametric VaR and CVaR. On real equity data, historical simulation (already implemented in `cvar_historical`) is preferable to parametric CVaR for confidence levels above 99%. The factor model implemented here uses PCA-based statistical factors, which are mathematical constructs without direct economic interpretation. Commercial models such as Barra (MSCI) use pre-specified fundamental factors — market, size, value, momentum, quality — whose loadings are estimated from cross-sectional regressions. The statistical factors in this implementation may rotate across windows, making it difficult to track factor exposure over time.
+- **Transaction Cost Modeling.** The backtest uses a simplified proportional transaction cost model (kappa * L1 turnover). In practice, market impact is non-linear and depends on order size, venue, and intraday timing. The current model likely understates costs for large allocations.
 
-### 9.2 Estimation Error
+- **Asset Universe Scope.** The five-ETF universe is intentionally narrow to ensure data availability and clean backtesting. Extension to individual equities, international markets, or alternative asset classes requires recalibration of the PCA dimensionality, HMM state count, and RL reward coefficients.
 
-Merton (1980) demonstrated that the variance of the portfolio return estimate is proportional to $N$ times the variance of the individual expected return estimates, while the variance attributable to covariance estimation errors is proportional to $N^2/T$. For typical portfolio sizes and observation windows, expected return estimation error dominates. The Black-Litterman framework mitigates this by shrinking $\hat{\boldsymbol{\mu}}$ toward $\boldsymbol{\Pi}$, but it does not eliminate the sensitivity: the posterior is still a linear function of the sample covariance, which is itself estimated with error. The shrinkage intensity $\alpha$ in Ledoit-Wolf OAS is estimated from the same data used to construct the covariance matrix, introducing a subtle overfitting bias in short rolling windows. A holdout-based calibration of the shrinkage target would reduce this bias at the cost of additional data requirements. The Black-Litterman Omega (view uncertainty matrix) is approximated as $\text{diag}(\tau\mathbf{P}\boldsymbol{\Sigma}\mathbf{P}^\top)$ following Idzorek's method, which assumes views are uncorrelated. A full Bayesian treatment with elicited off-diagonal view covariances would require additional practitioner input that is not feasible in a fully automated pipeline.
+- **Regime Label Stationarity.** The HMM is trained on the full historical sample, meaning regime labels for early dates are influenced by data that would not have been available at that time. This constitutes a mild form of lookahead bias in the labeling step that is difficult to eliminate without online HMM estimation.
 
-### 9.3 Optimization Limitations
+- **RL Sample Efficiency.** PPO requires approximately one million environment steps to converge on the five-asset universe. Scaling to larger universes or higher rebalancing frequencies (intraday) would require substantially more compute and potentially more sample-efficient algorithms such as SAC or model-based RL.
 
-SLSQP is a local gradient-based solver. For the maximum Sharpe ratio objective, which is non-convex in $\mathbf{w}$ (despite the Charnes-Cooper transformation), the multi-restart strategy with five Dirichlet initializations reduces but does not eliminate the probability of terminating at a non-global local optimum, particularly in high-dimensional problems ($N \ge 50$) or under tight constraint sets. The turnover constraint is implemented via proportional weight shrinkage toward the current portfolio: $\mathbf{w}_{\text{constrained}} = \mathbf{w}_{\text{old}} + \lambda(\mathbf{w}_{\text{new}} - \mathbf{w}_{\text{old}})$, where $\lambda = \min(1, L_{\max}/L)$ and $L$ is the realized one-way turnover. This is a first-order approximation to the true L1-constrained optimization problem and does not guarantee optimality of the constrained solution. Cardinality constraints — for example, "hold at most 20 of 100 available assets" — require mixed-integer quadratic programming (MIQP) and are not supported; the library assumes continuous weight allocations throughout.
-
-### 9.4 Backtesting Limitations
-
-The synthetic GBM data does not exhibit autocorrelation in returns, GARCH-type volatility clustering, or structural breaks. Walk-forward backtests on GBM data therefore overstate the reliability of out-of-sample performance, because the lookback-window parameters remain in-distribution for the evaluation window. On real equity and credit data, out-of-sample Sharpe ratios are typically 30–60% lower than in-sample estimates due to parameter instability. No survivorship bias correction is possible on synthetic data. Applied to real data, point-in-time constituent lists (as opposed to current index constituents) are required to avoid the well-documented survivorship bias in historical backtests. The transaction cost model assumes proportional spreads independent of trade size. In practice, market impact is a superlinear function of trade size relative to average daily volume (ADV). Modeling this properly requires asset-level ADV data and an impact model (e.g., Almgren-Chriss, 2001) that is not incorporated in the current implementation. No slippage or execution delay is modeled. A realistic implementation shortfall model would apply a one-day lag between the signal date and the execution date.
-
-### 9.5 Missing Features (Planned Extensions)
-
-The following methods are not currently implemented but are identified as high-priority extensions:
-
-- **Hierarchical Risk Parity (HRP):** Ledoit-Wolf shrinkage combined with single-linkage clustering and recursive bisection (López de Prado, 2016). HRP does not require matrix inversion and is more robust to degenerate covariance estimates.
-- **Regime-switching covariance:** Hidden Markov Model on realized volatility regime to switch between a low-volatility and high-volatility covariance matrix, with Viterbi decoding for regime classification.
-- **Online covariance updates:** Sherman-Morrison-Woodbury rank-one covariance updates in $O(N^2)$ per period, enabling streaming backtests without full re-estimation at each step.
-- **Cardinality-constrained optimization:** Mixed-integer quadratic programming (MIQP) to enforce a maximum number of held positions, using branch-and-bound solvers such as GUROBI or CVXPY's SCIP interface.
-- **Robust optimization under ellipsoidal uncertainty:** Ben-Tal and Nemirovski (1998) uncertainty sets centered on the point estimate $\hat{\boldsymbol{\mu}}$, yielding tractable second-order cone programs (SOCP) that are immune to worst-case parameter realizations.
-- **Multi-period dynamic portfolio optimization:** Transaction-cost-regularized stochastic dynamic programming over a finite horizon, generalizing the single-period objective to account for the intertemporal tradeoff between rebalancing costs and tracking error from the optimal static portfolio.
-
----
+- **Synthetic Training Data for DNN.** The rBergomi calibration DNN is trained on synthetic Monte Carlo data using a simplified Bergomi-Guyon approximation. This approximation introduces model risk: if the true market dynamics deviate from the rBergomi parameterization, calibrated H and eta values may be biased.
 
 ## References
 
-Markowitz, H. M. (1952). Portfolio selection. *Journal of Finance*, 7(1), 77–91.
+[1] H. Markowitz, "Portfolio selection," *The Journal of Finance*, vol. 7, no. 1, pp. 77–91, 1952.
 
-Black, F., & Litterman, R. (1992). Global portfolio optimization. *Financial Analysts Journal*, 48(5), 28–43.
+[2] J. D. Hamilton, "A new approach to the economic analysis of nonstationary time series and the business cycle," *Econometrica*, vol. 57, no. 2, pp. 357–384, 1989.
 
-He, G., & Litterman, R. (1999). *The intuition behind Black-Litterman model portfolios*. Goldman Sachs Investment Management Division.
+[3] A. Ang and G. Bekaert, "International asset allocation with regime shifts," *The Review of Financial Studies*, vol. 15, no. 4, pp. 1137–1187, 2002.
 
-Ledoit, O., & Wolf, M. (2004). A well-conditioned estimator for large-dimensional covariance matrices. *Journal of Multivariate Analysis*, 88(2), 365–411.
+[4] R. O. Michaud, "The Markowitz optimization enigma: Is optimized optimal?" *Financial Analysts Journal*, vol. 45, no. 1, pp. 31–42, 1989.
 
-Chen, Y., Wiesel, A., Eldar, Y. C., & Hero, A. O. (2010). Shrinkage algorithms for MMSE covariance estimation. *IEEE Transactions on Signal Processing*, 58(10), 5016–5029.
+[5] J. Gatheral, T. Jaisson, and M. Rosenbaum, "Volatility is rough," *Quantitative Finance*, vol. 18, no. 6, pp. 933–949, 2018.
 
-Rockafellar, R. T., & Uryasev, S. (2000). Optimization of conditional value-at-risk. *Journal of Risk*, 2(3), 21–41.
+[6] C. Bayer, P. Friz, and J. Gatheral, "Pricing under rough volatility," *Quantitative Finance*, vol. 16, no. 6, pp. 887–904, 2016.
 
-Roncalli, T. (2013). *Introduction to risk parity and budgeting*. CRC Press.
+[7] B. Horvath, A. Jacquier, and C. Muguruza, "Deep learning volatility," *Applied Mathematical Finance*, vol. 28, no. 6, pp. 499–521, 2021. arXiv:1901.09647.
 
-Merton, R. C. (1980). On estimating the expected return on the market: An exploratory investigation. *Journal of Financial Economics*, 8(4), 323–361.
+[8] M. Lopez de Prado, *Advances in Financial Machine Learning*. Hoboken, NJ: Wiley, 2018.
 
-Ben-Tal, A., & Nemirovski, A. (1998). Robust convex optimization. *Mathematics of Operations Research*, 23(4), 769–805.
+[9] S. Gu, B. Kelly, and D. Xiu, "Empirical asset pricing via machine learning," *The Review of Financial Studies*, vol. 33, no. 5, pp. 2223–2273, 2020.
 
-Almgren, R., & Chriss, N. (2001). Optimal execution of portfolio transactions. *Journal of Risk*, 3(2), 5–39.
+[10] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov, "Proximal policy optimization algorithms," arXiv:1707.06347, 2017.
 
-MSCI Barra. (2011). *Barra risk model handbook*. MSCI.
+[11] Z. Liang, H. Chen, J. Zhu, K. Jiang, and Y. Li, "Adversarial deep reinforcement learning in portfolio management," arXiv:1808.09940, 2018.
 
-López de Prado, M. (2016). Building diversified portfolios that outperform out-of-sample. *Journal of Portfolio Management*, 42(4), 59–69.
+[12] P. Nystrup, B. W. Hansen, H. O. Larsen, H. Madsen, and E. Lindstrom, "Dynamic portfolio optimization across hidden market regimes," *Quantitative Finance*, vol. 20, no. 1, pp. 83–95, 2020.
+
+## License and Citation
+
+This project is released under the MIT License. See `LICENSE` for details.
+
+If you reference this project in academic or professional work, please cite:
+
+```text
+Cardozo, F. (2024). RAMPA: Regime-Aware Multi-Agent Portfolio Allocator.
+Emory University. Available at: https://github.com/<username>/rampa
+```
+
